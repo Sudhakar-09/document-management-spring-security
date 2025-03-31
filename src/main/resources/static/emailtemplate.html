@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureDoc | Verify Your Email</title>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f9fbfc;
+            margin: 0;
+            padding: 0;
+        }
+        .email-container {
+            max-width: 600px;
+            margin: 40px auto;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 5px 30px rgba(0, 0, 0, 0.08);
+            padding: 40px;
+            text-align: center;
+            border-top: 4px solid #2d89ef;
+        }
+        .logo {
+            width: 160px;
+            margin-bottom: 20px;
+        }
+        .header {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+        .subtext {
+            font-size: 18px;
+            color: #555;
+            margin: 8px 0 20px;
+        }
+        .content {
+            font-size: 16px;
+            color: #444;
+            line-height: 1.5;
+            margin: 20px 0;
+        }
+        .steps-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 30px 0;
+            padding: 0 20px;
+        }
+        .step {
+            text-align: center;
+            position: relative;
+            flex: 1;
+        }
+        .step img {
+            width: 60px;
+            opacity: 0.3;
+            transition: 0.3s;
+        }
+        .step p {
+            font-size: 14px;
+            color: #888;
+            margin-top: 5px;
+        }
+        .highlight img {
+            opacity: 1;
+            transform: scale(1.1);
+        }
+        .highlight p {
+            font-weight: 600;
+            color: #2d89ef;
+        }
+        .tick {
+            position: absolute;
+            top: -5px;
+            right: 20px;
+            width: 26px;
+        }
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #2d89ef, #1e63c4);
+            color: #ffffff;
+            text-decoration: none;
+            padding: 16px 32px;
+            font-size: 17px;
+            font-weight: 600;
+            border-radius: 8px;
+            margin-top: 20px;
+            transition: 0.3s;
+            box-shadow: 0px 4px 10px rgba(45, 137, 239, 0.3);
+        }
+        .cta-button:hover {
+            background: linear-gradient(135deg, #1e63c4, #0c48a1);
+        }
+        .support-text {
+            font-size: 14px;
+            color: #777;
+            margin-top: 30px;
+        }
+        .footer {
+            font-size: 14px;
+            color: #777;
+            margin-top: 30px;
+        }
+        .footer a {
+            color: #2d89ef;
+            text-decoration: none;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <!-- SecureDoc Premium Logo -->
+        <img src="https://cdn-icons-png.flaticon.com/512/942/942799.png" class="logo" alt="SecureDoc Logo">
+        
+        <p class="header">Verify Your SecureDoc Account</p>
+        <p class="subtext">You're almost there! Just one more step to secure your account.</p>
+        
+        <!-- Step-by-Step Visual Journey -->
+        <div class="steps-container">
+            <div class="step">
+                <img src="https://cdn-icons-png.flaticon.com/512/747/747376.png" alt="Create Account">
+                <p>✔ Create Account</p>
+            </div>
+            <div class="step highlight">
+                <img src="https://cdn-icons-png.flaticon.com/512/5613/5613890.png" alt="Verify Email">
+                <img src="https://cdn-icons-png.flaticon.com/512/1828/1828640.png" class="tick" alt="Tick">
+                <p>✔ Verify Email</p>
+            </div>
+            <div class="step">
+                <img src="https://cdn-icons-png.flaticon.com/512/833/833472.png" alt="Enjoy SecureDoc">
+                <p>Enjoy SecureDoc</p>
+            </div>
+        </div>
+
+        <div class="content">
+            <p>Hi <strong>[User’s Name]</strong>,</p>
+            <p>Thank you for signing up with <strong>SecureDoc</strong>! To get started, click the button below to verify your email address.</p>
+            <a href="https://yourdomain.com/verify?token=[YourToken]" class="cta-button">Verify Your Email</a>
+            <p>If the button above doesn’t work, use this link:</p>
+            <p><a href="https://yourdomain.com/verify?token=[YourToken]">https://yourdomain.com/verify?token=[YourToken]</a></p>
+        </div>
+
+        <!-- Enterprise-Level Security Certification Logo -->
+        <img src="https://cdn-icons-png.flaticon.com/512/639/639365.png" class="logo" alt="Security Certified Logo">
+
+        <p class="support-text">If you did not sign up for SecureDoc, please ignore this email.</p>
+
+        <div class="footer">
+            Best regards,<br>
+            <strong>The SecureDoc Team</strong><br>
+            ✉ Need help? <a href="mailto:support@securedoc.com">Contact Support</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+#Database
+POSTGRESQL_USERNAME: user
+POSTGRESQL_PASSWORD: admin
+POSTGRESQL_HOST: localhost
+POSTGRESQL_PORT: 5432
+POSTGRESQL_DATABASE: securedoc
+
+#Server
+CONTAINER_PORT: 8085
+ACTIVE_PROFILE: prod
+
+#Email Config
+EMAIL_HOST: smtp.gmail.com
+EMAIL_PORT: 587
+EMAIL_ID: ssksudhakar.s@gmail.com  # Replace with actual email
+EMAIL_PASSWORD: your_password     # Replace with actual password
+VERIFY_EMAIL_HOST: http://localhost:8085
