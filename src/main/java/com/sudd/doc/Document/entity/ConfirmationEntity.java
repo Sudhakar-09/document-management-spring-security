@@ -40,7 +40,7 @@ public class ConfirmationEntity extends Auditable{
     @JsonProperty("user_id")
     private UserEntity userEntity;
     
-    public ConfirmationEntity(UserEntity userEntity,String key) {
+    public ConfirmationEntity(UserEntity userEntity) {
         this.userEntity= userEntity;
         this.key= UUID.randomUUID().toString();
         

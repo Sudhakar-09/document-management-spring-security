@@ -16,6 +16,7 @@ import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -25,6 +26,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @EqualsAndHashCode(callSuper = false) // when used @data JVM will be in ambugity to create equals() and hascode() for super class
 @Entity
+@Builder
 @Table(name = "users")
 @JsonInclude(JsonInclude.Include.NON_DEFAULT)
 public class UserEntity extends Auditable{
@@ -69,7 +71,7 @@ private String qrCodeImageUrl;
 joinColumns = @JoinColumn(name="user_id", referencedColumnName = "id"),
 // forigen key (fk) for role user_role table which is inherited by auditable 
 inverseJoinColumns = @JoinColumn(name="role_id" ,referencedColumnName="id"))
-private RolesEntity Role ;
+private RolesEntity role;
 
 // @Enumerated(EnumType.STRING)  
 // @Column(name = "role", nullable = false)  
