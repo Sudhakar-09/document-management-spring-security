@@ -10,6 +10,7 @@ import com.sudd.doc.Document.entity.UserEntity;
 
 @Repository
 public interface ConfirmationRepository extends JpaRepository<ConfirmationEntity,Long> {
+    // token 
     Optional<ConfirmationEntity> findByKey(String key);
     Optional<ConfirmationEntity> findByUserEntity(UserEntity userEntity);
     

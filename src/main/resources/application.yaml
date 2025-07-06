@@ -20,7 +20,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none    
     show-sql: true
     properties:
       hibernate:
@@ -28,10 +28,10 @@ spring:
 
   sql:
     init:
-      mode: never
-      schema-locations: classpath:data/schema.sql
-      data-locations: file:/data/data.sql
-      continue-on-error: false
+      mode: always
+      schema-locations: classpath:schema.sql
+      data-locations: classpath:data.sql
+      continue-on-error: true
 
   servlet:
     multipart:
@@ -67,3 +67,8 @@ server:
     path: /user/error
     whitelabel:
       enabled: false
+
+# ✅ This is what was missing (add this at the very end)
+logging:
+  level:
+    "[org.springframework.jdbc.datasource.init.ScriptUtils]": DEBUG

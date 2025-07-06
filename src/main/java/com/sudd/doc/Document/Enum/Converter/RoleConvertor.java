@@ -7,6 +7,9 @@ import com.sudd.doc.Document.Enum.Authority;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 // takes enum , type 
+// AttributeConverter<X, Y> is a JPA interface that allows you to automatically convert a field between:
+// Java type (X) used in your entity class, and
+// Database type (Y) stored in your DB column
 @Converter(autoApply = true)
 public class RoleConvertor implements AttributeConverter<Authority , String> {
 

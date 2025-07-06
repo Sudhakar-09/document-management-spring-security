@@ -20,6 +20,7 @@ public class UserUtils {
                 .isAccountNonExpired(true)
                 .isAccountNonLocked(true)
                 .isEnabled(false)
+                .isMfaEnabled(false)
                 .LoginAttempts(0)
                 .qrCodeSecretKey(StringUtils.EMPTY)
                 .phoneNumber(StringUtils.EMPTY)

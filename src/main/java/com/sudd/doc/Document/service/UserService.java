@@ -6,5 +6,6 @@ public interface UserService {
 
     void CreateUser(String firstName,String lastName, String email, String password);
     RolesEntity getRoleName(String name);
+    void VerifyAccountToken(String key);
     
 }

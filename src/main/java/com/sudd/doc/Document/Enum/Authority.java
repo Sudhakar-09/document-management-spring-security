@@ -21,9 +21,5 @@ public enum Authority {
   public String getValue() {
     return this.value;
 }
-
-
-
-
-    
+ 
 }

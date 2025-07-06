@@ -30,6 +30,7 @@ import lombok.NoArgsConstructor;
 @Table(name = "users")
 @JsonInclude(JsonInclude.Include.NON_DEFAULT)
 public class UserEntity extends Auditable{
+    
 @Column(name = "user_id" , nullable = false , updatable = false,unique = true)    
 private String userId;                   
 
@@ -39,35 +40,43 @@ private String lastName;
 
 @Column(name = "email" , nullable = true , unique = true )               
 private String email;                  
-
+@Column(name = "login_attempts")
 private Integer LoginAttempts;    
 
+@Column(name = "last_login")
 private LocalDateTime lastLoginAt;   
 
+@Column(name = "phone")
 private String phoneNumber;    
 
-private String bio;        
-
+private String bio;   
+     
+@Column(name = "image_url")
 private String profileImageUrl;    
 
+@Column(name = "account_non_expired")
 private boolean isAccountNonExpired;   
 
+@Column(name = "account_non_locked")
 private boolean isAccountNonLocked; 
 
-private boolean isEnabled;      
-
+@Column(name = "enabled")
+private boolean isEnabled;   
+   
+@Column(name = "mfa")
 private boolean isMfaEnabled;  
 
 @JsonIgnore         
-@Column(columnDefinition = "text")
-
+@Column(name = "qr_code_secret",columnDefinition = "text")
 private String qrCodeSecretKey;  
 
+@Column(name = "qr_code_image_uri")
 private String qrCodeImageUrl;  
 
 // id(primary key) is coming from the AUDITTABLE CLASS which is inherited by other entity class 
+// When loading a UserEntity, always also load its role immediately
 @ManyToOne(fetch = FetchType.EAGER)
-@JoinTable(name ="user_role" , 
+@JoinTable(name ="user_roles" , 
 joinColumns = @JoinColumn(name="user_id", referencedColumnName = "id"),
 // forigen key (fk) for role user_role table which is inherited by auditable 
 inverseJoinColumns = @JoinColumn(name="role_id" ,referencedColumnName="id"))

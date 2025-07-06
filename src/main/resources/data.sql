@@ -1,0 +1,16 @@
+-- -- INSERT SYSTEM USER
+-- INSERT INTO users (
+--     id, user_id, first_name, last_name, email, login_attempts, last_login,
+--     phone, bio, image_url,
+--     account_non_expired, account_non_locked, enabled, mfa,
+--     qr_code_secret, qr_code_image_uri,
+--     reference_id, created_by, updated_by, created_at, updated_at
+-- ) VALUES (
+--     0, 'system', 'Sudhakar', 'S', 'ssksudhakar.s@gmail.com', 0, CURRENT_TIMESTAMP,
+--     '1234567890', 'System User Account', 'https://png.pngtree.com/png-clipart/20230927/original/pngtree-man-avatar-image-for-profile-png-image_13001877.png',
+--     true, true, false, false,
+--     '', '',
+--     'system', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+-- )
+-- ON CONFLICT (user_id) DO NOTHING;
+SELECT COUNT(*) FROM users;

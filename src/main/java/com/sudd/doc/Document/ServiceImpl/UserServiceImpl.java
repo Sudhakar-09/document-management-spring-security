@@ -44,7 +44,7 @@ public class UserServiceImpl implements UserService {
     public void CreateUser(String firstName, String lastName, String email, String password) {
 
         // save the user // userRepository--> managing userEntity
-        var userEntity = userRepository.save(CreateNewUser(firstName, lastName, email));
+        var userEntity = userRepository.save(createNewUser(firstName, lastName, email));
         var credentialEntity = new CredentialEntity(userEntity, password);
         credentialRepository.save(credentialEntity);
         var confirmationEntity = new ConfirmationEntity(userEntity);
@@ -54,17 +54,42 @@ public class UserServiceImpl implements UserService {
 
     }
 
-    private UserEntity CreateNewUser(String firstName, String lastName, String email) {
-        // create a new role // seed the database (0)
-        var role = getRoleName(Authority.USER.name());
-        return UserUtils.createUserEntity(firstName, lastName, email, role);
-    }
-
     @Override
     public RolesEntity getRoleName(String name) {
 
         var role = roleRepository.findByNameIgnoreCase(name);
 
         return role.orElseThrow(() -> new ApiException("Role not found"));
+    }
+   
+    // CREATE USER API 
+    private UserEntity createNewUser(String firstName, String lastName, String email) {
+        // create a new role // seed the database (0)
+        var role = getRoleName(Authority.USER.name());
+        return UserUtils.createUserEntity(firstName, lastName, email, role);
+    }
+
+
+// VERIFY USER ACCOUNT 
+    @Override
+    public void VerifyAccountToken(String key) {
+        // find email by key from confirmations 
+       var confirmationEntity = getUserConfirmation(key);
+        // get the user entity and enable the account and save userEntity and delete the confirmation 
+       UserEntity userEntity = getUserEntityByEmail(confirmationEntity.getUserEntity().getEmail());
+       userEntity.setEnabled(true);
+       userRepository.save(userEntity);
+       confirmationRepository.delete(confirmationEntity);
+       
+    }
+
+    private UserEntity getUserEntityByEmail(String email) {
+     
+        var userByEmail=userRepository.findByEmailIgnoreCase(email);
+       return userByEmail.orElseThrow( () -> new ApiException("User Not found"));
+    }
+
+    private  ConfirmationEntity getUserConfirmation(String key) {
+         return confirmationRepository.findByKey(key).orElseThrow( ()-> new ApiException("User Confirmation Key Not Found"));
     }
 }

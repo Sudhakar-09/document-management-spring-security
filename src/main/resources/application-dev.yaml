@@ -10,8 +10,8 @@ CONTAINER_PORT: 8085
 ACTIVE_PROFILE: dev
 
 #Email Config
-EMAIL_HOST: smtp.gmail.com
+EMAIL_HOST: http://localhost:8085
 EMAIL_PORT: 587
 EMAIL_ID: ssksudhakar.s@gmail.com  # Replace with actual email
-EMAIL_PASSWORD: sudhakar123     # Replace with actual password
+EMAIL_PASSWORD: jvwc tupt hoyg lygj     # Replace with actual password
 VERIFY_EMAIL_HOST: http://localhost:8085
