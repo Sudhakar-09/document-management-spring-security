@@ -6,15 +6,12 @@ pipeline {
         maven 'mvn'
     }
 
-    environment {
-        SCANNER_HOME = tool 'SonarScanner'
-    }
-
     stages {
 
         stage('Checkout') {
             steps {
                 checkout scm
+                sh "ls -lah"
             }
         }
 
@@ -28,7 +25,7 @@ pipeline {
             steps {
                 withSonarQubeEnv('MySonar') {
                     sh """
-                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        /opt/sonar-scanner/bin/sonar-scanner \
                         -Dproject.settings=sonar-project.properties
                     """
                 }
