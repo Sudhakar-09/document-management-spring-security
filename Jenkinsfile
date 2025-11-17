@@ -8,7 +8,6 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'SonarScanner'
-        SONARQUBE = credentials('SONAR_TOKEN')
     }
 
     stages {
@@ -19,14 +18,13 @@ pipeline {
             }
         }
 
-        stage('Build (Java 17)') {
+        stage('Build') {
             steps {
-                sh "java -version"
-                sh "mvn clean package -DskipTests"
+                sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('SonarQube Scan') {
+        stage('Sonar Scan') {
             steps {
                 withSonarQubeEnv('MySonar') {
                     sh """
@@ -37,7 +35,7 @@ pipeline {
             }
         }
 
-        stage("Quality Gate") {
+        stage('Quality Gate') {
             steps {
                 script {
                     waitForQualityGate abortPipeline: true
@@ -48,16 +46,7 @@ pipeline {
 
     post {
         always {
-            echo "Archiving JAR files…"
-            archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
-        }
-
-        success {
-            echo "Pipeline success!"
-        }
-
-        failure {
-            echo "Pipeline failed!"
+            archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
         }
     }
 }
