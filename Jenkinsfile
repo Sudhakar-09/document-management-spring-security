@@ -1,15 +1,14 @@
 pipeline {
-
     agent any
 
-tools {
-    jdk 'JDK17'
-    maven 'mvn'
-}
+    tools {
+        jdk 'JDK17'
+        maven 'mvn'
+    }
 
     environment {
-        SONARQUBE = credentials('SONAR_TOKEN') // Optional if using Jenkins credential
-        SCANNER_HOME = tool 'SonarScanner'     // Must match tool name in Jenkins
+        SCANNER_HOME = tool 'SonarScanner'
+        SONARQUBE = credentials('SONAR_TOKEN')
     }
 
     stages {
@@ -22,17 +21,14 @@ tools {
 
         stage('Build (Java 17)') {
             steps {
-                echo "Using Java version"
                 sh "java -version"
-
-                echo "Running Maven Build"
                 sh "mvn clean package -DskipTests"
             }
         }
 
         stage('SonarQube Scan') {
             steps {
-                withSonarQubeEnv('MySonar') {   // Must match SonarQube server name
+                withSonarQubeEnv('MySonar') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
                         -Dproject.settings=sonar-project.properties
@@ -52,15 +48,19 @@ tools {
 
     post {
         always {
-            archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
-        }
-
-        success {
-            echo "Build success!"
+            script {
+                if (fileExists('target')) {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
         }
 
         failure {
             echo "Pipeline failed!"
+        }
+
+        success {
+            echo "Pipeline success!"
         }
     }
 }
