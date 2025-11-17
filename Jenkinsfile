@@ -2,10 +2,10 @@ pipeline {
 
     agent any
 
-    tools {
-        jdk 'JDK17'              // MUST match Global Tool Configuration name
-        maven 'Maven-3.8'        // MUST match Maven name in Jenkins
-    }
+tools {
+    jdk 'JDK17'
+    maven 'mvn'
+}
 
     environment {
         SONARQUBE = credentials('SONAR_TOKEN') // Optional if using Jenkins credential
