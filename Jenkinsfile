@@ -48,19 +48,16 @@ pipeline {
 
     post {
         always {
-            script {
-                if (fileExists('target')) {
-                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
-                }
-            }
-        }
-
-        failure {
-            echo "Pipeline failed!"
+            echo "Archiving JAR files…"
+            archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
         }
 
         success {
             echo "Pipeline success!"
+        }
+
+        failure {
+            echo "Pipeline failed!"
         }
     }
 }
