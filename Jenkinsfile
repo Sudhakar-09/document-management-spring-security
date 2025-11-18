@@ -49,11 +49,8 @@ pipeline {
                     withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
 
                         echo "[INFO] Reading CE Task ID"
-                        def ceTaskId = sh(
-                            script: "grep ceTaskId **/report-task.txt | cut -d= -f2",
-                            returnStdout: true
-                        ).trim()
-
+                       def ceTaskId = sh(
+                         script: "grep ceTaskId target/sonar/report-task.txt | cut -d= -f2", returnStdout: true).trim()
                         echo "[INFO] CE Task ID = ${ceTaskId}"
 
                         def analysisId = ""
