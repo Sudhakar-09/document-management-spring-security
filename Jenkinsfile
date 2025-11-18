@@ -16,7 +16,6 @@ pipeline {
 
   stages {
 
-    /* ------------------------ 1. CHECKOUT ------------------------ */
     stage('Checkout') {
       steps {
         echo "[1/9] Checkout"
@@ -27,7 +26,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 2. BUILD ------------------------ */
     stage('Build') {
       steps {
         echo "[2/9] Build"
@@ -35,98 +33,63 @@ pipeline {
       }
     }
 
-    /* ------------------------ 3. SONAR SCAN ------------------------ */
     stage('Sonar Scan') {
       steps {
         echo "[3/9] Running sonar scan"
-
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-          sh """
+          sh '''
             mvn sonar:sonar \
-              -Dsonar.token=\$SONAR_TOKEN \
+              -Dsonar.token=$SONAR_TOKEN \
               -Dsonar.host.url=${SONAR_HOST} \
               -Dsonar.projectKey=ai-code-assistant \
               -Dsonar.sources=src/main/java \
               -Dsonar.java.binaries=target/classes \
               -Dsonar.projectName="AI Code Assistant"
-          """
+          '''
         }
       }
     }
 
-    /* ------------------------ 4. QUALITY GATE ------------------------ */
     stage('Quality Gate') {
       steps {
         echo "[4/9] Waiting for CE + Quality Gate"
         script {
           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-
-            /* ---- Get CE Task ID ---- */
             def ceTaskId = sh(
               script: "grep -o 'ceTaskId=[A-Za-z0-9\\-]*' target/sonar/report-task.txt | cut -d= -f2 || true",
               returnStdout: true
             ).trim()
-
             if (!ceTaskId) error "CE Task ID NOT FOUND"
-
             echo "CE Task ID = ${ceTaskId}"
 
-            /* ---- Wait until CE finishes ---- */
             timeout(time: 5, unit: 'MINUTES') {
               waitUntil {
                 def resp = sh(
                   script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
                   returnStdout: true
                 ).trim()
-
-                def status = sh(
-                  script: "echo '${resp}' | jq -r '.task.status'",
-                  returnStdout: true
-                ).trim()
-
+                def status = sh(script: "echo '${resp}' | jq -r '.task.status'", returnStdout: true).trim()
                 echo "CE Status = ${status}"
-
                 return (status == "SUCCESS" || status == "FAILED")
               }
             }
 
-            /* ---- Last response ---- */
-            def finalResp = sh(
-              script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
-              returnStdout: true
-            ).trim()
-
-            def analysisId = sh(
-              script: "echo '${finalResp}' | jq -r '.task.analysisId'",
-              returnStdout: true
-            ).trim()
-
+            def finalResp = sh(script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}", returnStdout: true).trim()
+            def analysisId = sh(script: "echo '${finalResp}' | jq -r '.task.analysisId'", returnStdout: true).trim()
             env.ANALYSIS_ID = analysisId
 
-            /* ---- Get Quality Gate ---- */
-            def qgJson = sh(
-              script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
-              returnStdout: true
-            ).trim()
-
+            def qgJson = sh(script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}", returnStdout: true).trim()
             writeFile file: "${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json", text: qgJson
-
-            def qgStatus = sh(
-              script: "echo '${qgJson}' | jq -r '.projectStatus.status'",
-              returnStdout: true
-            ).trim()
-
+            def qgStatus = sh(script: "echo '${qgJson}' | jq -r '.projectStatus.status'", returnStdout: true).trim()
             echo "Quality Gate = ${qgStatus}"
           }
         }
       }
     }
 
-    /* ------------------------ 5. FETCH ISSUES ------------------------ */
     stage('Fetch Issues') {
       steps {
         echo "[5/9] Fetching Sonar issues"
-
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
           sh """
             curl -s -u \$SONAR_TOKEN: \
@@ -137,25 +100,22 @@ pipeline {
       }
     }
 
-    /* ------------------------ 6. AI ANALYSIS ------------------------ */
     stage('AI Analysis & Report Generation') {
       steps {
         echo "[6/9] AI report generation"
-
         withCredentials([
           string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
           string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
         ]) {
-
           script {
-
+            // read issues JSON
             def issuesJson = readFile("${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json")
             def issues = readJSON(text: issuesJson)
 
             def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
 
-            /* ---- Create header ---- */
-            def header = """
+            // header (write via here-doc to preserve exact content)
+            sh """cat <<'EOF' > ${mdFile}
 # 🧾 SonarQube Code Quality Report
 
 **Project:** ai-code-assistant  
@@ -163,18 +123,24 @@ pipeline {
 **Branch:** ${REPO_BRANCH}  
 **Build:** ${BUILD_NUMBER}  
 **Generated:** ${new Date().format("yyyy-MM-dd HH:mm:ss")}  
-**Analysis ID:** ${env.ANALYSIS_ID}  
+**Analysis ID:** ${env.ANALYSIS_ID ?: 'N/A'}
 
 ---
+EOF
 """
-            writeFile file: mdFile, text: header
 
-            /* ---- Severity summary ---- */
-            def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
-            issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
+            // compute counts
+            def counts = [BLOCKER:0,CRITICAL:0,MAJOR:0,MINOR:0,INFO:0]
+            issues.issues.each { issue ->
+              def sev = (issue.severity ?: "INFO").toUpperCase()
+              if (sev == 'BLOCKER') counts.BLOCKER++
+              else if (sev == 'CRITICAL') counts.CRITICAL++
+              else if (sev == 'MAJOR') counts.MAJOR++
+              else if (sev == 'MINOR') counts.MINOR++
+              else counts.INFO++
+            }
 
-            def summary = """
-## 📊 Summary
+            def summary = """## 📊 Summary
 
 | Severity | Emoji | Count |
 |---------|:-----:|------:|
@@ -184,121 +150,149 @@ pipeline {
 | Minor | 🟡 | ${counts.MINOR} |
 | Info | 🔵 | ${counts.INFO} |
 
-Total issues: ${issues.total ?: issues.issues.size()}
+Total issues: ${issues.paging?.total ?: issues.issues.size()}
 
 ---
 """
-            sh """echo "${summary.replace('"','\\"')}" >> ${mdFile}"""
 
-            /* ---- Iterate issues ---- */
+            // append summary using a single-quoted here-doc to avoid expansion/execution
+            sh """cat <<'EOF' >> ${mdFile}
+${summary}
+EOF
+"""
+
+            // iterate issues
             def idx = 0
-
             for (issue in issues.issues) {
               idx++
+              def comp = issue.component ?: ''
+              def filepath = comp.replaceFirst('^ai-code-assistant:', '')
+              def line = (issue.line ?: 1) as Integer
+              def startLine = Math.max(1, line - 2)
+              def endLine = line + 2
 
-              def filepath = issue.component.replace("ai-code-assistant:", "")
-              def line = (issue.line ?: 1) as int
-              def start = Math.max(1, line - 2)
-              def end = line + 2
+              def snippet = ""
+              if (fileExists(filepath)) {
+                snippet = sh(script: "sed -n '${startLine},${endLine}p' ${filepath} || true", returnStdout: true).trim()
+              } else {
+                snippet = "// file not found in workspace: ${filepath}"
+              }
 
-              def snippet = fileExists(filepath)
-                ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
-                : "// File not found: ${filepath}"
+              def blameInfo = fileExists(filepath) ? sh(script: "git blame -L ${line},${line} -- ${filepath} | sed -n '1,1p' || true", returnStdout: true).trim() : "N/A"
+              def githubLink = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${startLine}-L${endLine}"
 
-              def blame = fileExists(filepath)
-                ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
-                : "N/A"
+              // build prompt (escape handled by writeFile)
+              def userPrompt = """You are an expert Java developer and code reviewer. Given the Sonar issue below, produce a high-quality Markdown analysis section with:
+- Short summary (1-2 lines)
+- Root cause explanation
+- Proposed fix (code block, diff-style if possible)
+- Estimated fix time in minutes
+- Priority (High/Medium/Low)
+- Risk score (0-100)
+- One-line git action suggestion (e.g., "create branch fix/sonar-<key>" or "open PR to main")
 
-              def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
-
-              def prompt = """
-Analyze this Sonar issue:
-
-Rule: ${issue.rule}
+Issue rule: ${issue.rule}
 Message: ${issue.message}
 Severity: ${issue.severity}
 File: ${filepath}
-Line: ${line}
-
-Code:
+Lines: ${startLine}-${endLine}
+Code snippet:
+\`\`\`java
 ${snippet}
+\`\`\`
 
-Provide:
-- Summary
-- Root cause
-- Fix with Java code block
-- Priority
-- Time estimate
-- Risk score
+Make the output pure Markdown (no extra commentary). Keep it concise but actionable.
 """
 
-              def esc = prompt
-                  .replace("\\","\\\\")
-                  .replace("\"","\\\\\"")
-                  .replace("\n","\\n")
+              // write payload safely
+              def payloadJson = groovy.json.JsonOutput.toJson([
+                model: "gpt-4.1-mini",
+                messages: [[role: "user", content: userPrompt]],
+                max_tokens: 1200
+              ])
+              writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payloadJson
 
-              def payload = """
-{
-  "model": "gpt-4.1-mini",
-  "messages": [
-    {"role": "user", "content": "${esc}"}
-  ]
-}
-"""
-              writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
-
+              // call OpenAI
               def aiOut = sh(
-                script: """
-                  curl -s -X POST "https://api.openai.com/v1/chat/completions" \
-                    -H "Authorization: Bearer \$OPENAI_KEY" \
-                    -H "Content-Type: application/json" \
-                    -d @"${REPORT_DIR}/payload-${idx}.json" \
-                    | jq -r '.choices[0].message.content'
-                """,
+                script: """curl -s -X POST "https://api.openai.com/v1/chat/completions" \\
+  -H "Authorization: Bearer \$OPENAI_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d @"${REPORT_DIR}/payload-${idx}.json" | jq -r '.choices[0].message.content' || true""",
                 returnStdout: true
               ).trim()
 
-              def block = """
+              // build markdown block (use here-doc single-quoted to preserve everything)
+              def blockHeader = """
 ---
 
-### Issue ${idx} — **${issue.severity}**
-**Message:** ${issue.message}  
-**File:** ${filepath}  
-**Line:** ${line}  
-**GitHub:** ${link}  
-**Blame:** ${blame}
+### Issue ${idx} — **${issue.severity ?: 'INFO'}**
+**Rule:** ${issue.rule}
+**Message:** ${issue.message}
+**File:** ${filepath}
+**Lines:** ${startLine}-${endLine}
+**Issue Key:** ${issue.key}
+**Git blame (line ${line}):** ${blameInfo}
+**GitHub link:** ${githubLink}
 
-#### Code Snippet
-${snippet.replaceAll("(?m)^", "    ")}
-
-#### AI Recommendation
-${aiOut}
-
+#### Code snippet
+"""
+              // append header
+              sh """cat <<'EOF' >> ${mdFile}
+${blockHeader}
+EOF
 """
 
-              sh """echo "${block.replace('"','\\"')}" >> ${mdFile}"""
+              // append code snippet (indented)
+              def indented = snippet.replaceAll("(?m)^", "    ")
+              sh """cat <<'EOF' >> ${mdFile}
+\`\`\`java
+${indented}
+\`\`\`
+EOF
+"""
+
+              // append AI output
+              sh """cat <<'EOF' >> ${mdFile}
+#### AI analysis & suggestion
+${aiOut}
+
+EOF
+"""
+            } // end issues loop
+
+            echo "[INFO] Markdown report written to ${mdFile}"
+
+            // optional HTML via pandoc (if installed)
+            def htmlFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.html"
+            def hasPandoc = sh(script: "command -v pandoc >/dev/null 2>&1 && echo yes || echo no", returnStdout: true).trim()
+            if (hasPandoc == 'yes') {
+              sh "pandoc ${mdFile} -o ${htmlFile} -s -V title='Code Quality Report' || true"
+              echo "[INFO] HTML report generated: ${htmlFile}"
+            } else {
+              echo "[INFO] pandoc not found — skipping HTML generation."
             }
-          }
+          } // script
+        } // withCredentials
+      } // steps
+    } // stage
+
+    stage('Archive Reports') {
+      steps {
+        echo "[7/9] Archiving reports"
+        archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
+        archiveArtifacts artifacts: "target/*.jar", allowEmptyArchive: true
+        script {
+          echo "Markdown report: ${env.BUILD_URL}artifact/${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
         }
       }
     }
 
-    /* ------------------------ 7. ARCHIVE ------------------------ */
-    stage('Archive Reports') {
-      steps {
-        echo "[7/9] Archiving"
-        archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
-        archiveArtifacts artifacts: "target/*.jar", allowEmptyArchive: true
-      }
-    }
-
-    /* ------------------------ 8. FINISH ------------------------ */
     stage('Finish') {
       steps {
         echo "[8/9] Pipeline complete!"
       }
     }
-  }
+  } // stages
 
   post {
     always { echo "Pipeline finished." }
