@@ -16,62 +16,66 @@ pipeline {
 
   stages {
 
+    /* ------------------------ 1. CHECKOUT ------------------------ */
     stage('Checkout') {
       steps {
         echo "[1/9] Checkout"
         checkout scm
-        sh 'mkdir -p ${REPORT_DIR}'
-        sh 'git --version || true'
-        sh 'jq --version || true'
+        sh "mkdir -p ${REPORT_DIR}"
+        sh "git --version || true"
+        sh "jq --version || true"
       }
     }
 
+    /* ------------------------ 2. BUILD ------------------------ */
     stage('Build') {
       steps {
         echo "[2/9] Build"
-        sh 'mvn clean package -DskipTests'
+        sh "mvn clean package -DskipTests"
       }
     }
 
+    /* ------------------------ 3. SONAR SCAN ------------------------ */
     stage('Sonar Scan') {
       steps {
         echo "[3/9] Running sonar scan"
+
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-          sh '''
+          sh """
             mvn sonar:sonar \
-              -Dsonar.token=$SONAR_TOKEN \
+              -Dsonar.token=\$SONAR_TOKEN \
               -Dsonar.host.url=${SONAR_HOST} \
               -Dsonar.projectKey=ai-code-assistant \
               -Dsonar.sources=src/main/java \
               -Dsonar.java.binaries=target/classes \
               -Dsonar.projectName="AI Code Assistant"
-          '''
+          """
         }
       }
     }
 
+    /* ------------------------ 4. QUALITY GATE ------------------------ */
     stage('Quality Gate') {
       steps {
         echo "[4/9] Waiting for CE + Quality Gate"
-
         script {
           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
 
+            /* ---- Get CE Task ID ---- */
             def ceTaskId = sh(
               script: "grep -o 'ceTaskId=[A-Za-z0-9\\-]*' target/sonar/report-task.txt | cut -d= -f2 || true",
               returnStdout: true
             ).trim()
 
-            if (!ceTaskId) {
-              error "CE Task ID NOT FOUND — ensure sonar scanner generated report-task.txt"
-            }
+            if (!ceTaskId) error "CE Task ID NOT FOUND"
 
             echo "CE Task ID = ${ceTaskId}"
 
+            /* ---- Wait until CE finishes ---- */
             timeout(time: 5, unit: 'MINUTES') {
               waitUntil {
                 def resp = sh(
-                  script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
+                  script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
                   returnStdout: true
                 ).trim()
 
@@ -86,8 +90,9 @@ pipeline {
               }
             }
 
+            /* ---- Last response ---- */
             def finalResp = sh(
-              script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
+              script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
               returnStdout: true
             ).trim()
 
@@ -98,8 +103,9 @@ pipeline {
 
             env.ANALYSIS_ID = analysisId
 
+            /* ---- Get Quality Gate ---- */
             def qgJson = sh(
-              script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
+              script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
               returnStdout: true
             ).trim()
 
@@ -111,31 +117,30 @@ pipeline {
             ).trim()
 
             echo "Quality Gate = ${qgStatus}"
-
-            if (qgStatus != "OK") {
-              echo "Quality Gate is NOT OK — continuing to fetch issues"
-            }
           }
         }
       }
     }
 
+    /* ------------------------ 5. FETCH ISSUES ------------------------ */
     stage('Fetch Issues') {
       steps {
         echo "[5/9] Fetching Sonar issues"
+
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
           sh """
-            curl -s -u ${SONAR_TOKEN}: \
-            "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
-            > ${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json
+            curl -s -u \$SONAR_TOKEN: \
+              "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
+              > ${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json
           """
         }
       }
     }
 
+    /* ------------------------ 6. AI ANALYSIS ------------------------ */
     stage('AI Analysis & Report Generation') {
       steps {
-        echo "[6/9] Enriching issues + AI report generation"
+        echo "[6/9] AI report generation"
 
         withCredentials([
           string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
@@ -149,7 +154,7 @@ pipeline {
 
             def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
 
-            /* ------------ Header ------------ */
+            /* ---- Create header ---- */
             def header = """
 # 🧾 SonarQube Code Quality Report
 
@@ -164,11 +169,9 @@ pipeline {
 """
             writeFile file: mdFile, text: header
 
-            /* ------------ Summary ------------ */
+            /* ---- Severity summary ---- */
             def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
-            issues.issues.each { i ->
-              counts[(i.severity ?: "INFO")]++
-            }
+            issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
 
             def summary = """
 ## 📊 Summary
@@ -185,16 +188,14 @@ Total issues: ${issues.total ?: issues.issues.size()}
 
 ---
 """
+            sh """echo "${summary.replace('"','\\"')}" >> ${mdFile}"""
 
-            def old1 = readFile(mdFile)
-            writeFile file: mdFile, text: old1 + summary
-
-            /* ------------ Issue Loop ------------ */
+            /* ---- Iterate issues ---- */
             def idx = 0
+
             for (issue in issues.issues) {
               idx++
 
-              /* Prepare snippet */
               def filepath = issue.component.replace("ai-code-assistant:", "")
               def line = (issue.line ?: 1) as int
               def start = Math.max(1, line - 2)
@@ -202,19 +203,16 @@ Total issues: ${issues.total ?: issues.issues.size()}
 
               def snippet = fileExists(filepath)
                 ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
-                : "// file not found: ${filepath}"
+                : "// File not found: ${filepath}"
 
-              /* Git blame */
               def blame = fileExists(filepath)
                 ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
                 : "N/A"
 
-              /* Link */
               def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
 
-              /* Prompt */
               def prompt = """
-You are an expert Java developer. Analyze this Sonar issue:
+Analyze this Sonar issue:
 
 Rule: ${issue.rule}
 Message: ${issue.message}
@@ -228,35 +226,31 @@ ${snippet}
 Provide:
 - Summary
 - Root cause
-- Fix with code block
+- Fix with Java code block
 - Priority
-- Fix time estimate
+- Time estimate
 - Risk score
-- Git suggestion
 """
 
-              /* Escape prompt */
-              def escaped = prompt
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
+              def esc = prompt
+                  .replace("\\","\\\\")
+                  .replace("\"","\\\\\"")
+                  .replace("\n","\\n")
 
-              def json = """
+              def payload = """
 {
   "model": "gpt-4.1-mini",
   "messages": [
-    { "role": "user", "content": "${escaped}" }
-  ],
-  "max_tokens": 1200
+    {"role": "user", "content": "${esc}"}
+  ]
 }
 """
-              writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: json
+              writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
 
-              /* OpenAI call */
               def aiOut = sh(
                 script: """
                   curl -s -X POST "https://api.openai.com/v1/chat/completions" \
-                    -H "Authorization: Bearer $OPENAI_KEY" \
+                    -H "Authorization: Bearer \$OPENAI_KEY" \
                     -H "Content-Type: application/json" \
                     -d @"${REPORT_DIR}/payload-${idx}.json" \
                     | jq -r '.choices[0].message.content'
@@ -264,12 +258,10 @@ Provide:
                 returnStdout: true
               ).trim()
 
-              /* Write issue block */
               def block = """
 ---
 
 ### Issue ${idx} — **${issue.severity}**
-
 **Message:** ${issue.message}  
 **File:** ${filepath}  
 **Line:** ${line}  
@@ -284,8 +276,7 @@ ${aiOut}
 
 """
 
-              def existing = readFile(mdFile)
-              writeFile file: mdFile, text: existing + block
+              sh """echo "${block.replace('"','\\"')}" >> ${mdFile}"""
             }
           }
         }
@@ -295,35 +286,23 @@ ${aiOut}
     /* ------------------------ 7. ARCHIVE ------------------------ */
     stage('Archive Reports') {
       steps {
-        echo "[7/9] Archiving reports"
-
-        // Always archive the generated MD report + payloads
+        echo "[7/9] Archiving"
         archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
         archiveArtifacts artifacts: "target/*.jar", allowEmptyArchive: true
-
-        echo "Artifacts archived successfully."
       }
     }
 
     /* ------------------------ 8. FINISH ------------------------ */
     stage('Finish') {
       steps {
-        echo "[8/9] Pipeline completed successfully!"
-        echo "Download your reports from the 'Artifacts' section."
+        echo "[8/9] Pipeline complete!"
       }
     }
-  } // end stages
+  }
 
-  /* ------------------------ POST ACTIONS ------------------------ */
   post {
-    always {
-      echo "Pipeline finished."
-    }
-    success {
-      echo "✅ SUCCESS — Build + Code Quality Report Generated!"
-    }
-    failure {
-      echo "❌ FAILED — Check logs for errors."
-    }
+    always { echo "Pipeline finished." }
+    success { echo "SUCCESS" }
+    failure { echo "FAILED — Check logs" }
   }
 }
