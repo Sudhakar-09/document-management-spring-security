@@ -24,13 +24,13 @@ pipeline {
         stage('Build') {
             steps {
                 echo "========== Building application =========="
-                sh "mvn clean package -DskipTests"
+                sh 'mvn clean package -DskipTests'
             }
         }
 
         stage('Sonar Scan') {
             steps {
-                echo "========== Running SonarQube Scan =========="
+                echo "========== Running SonarQube scan =========="
                 sh """
                     mvn sonar:sonar \
                         -Dsonar.login=${SONAR_TOKEN} \
@@ -40,6 +40,7 @@ pipeline {
                         -Dsonar.sources=src/main/java \
                         -Dsonar.java.binaries=target/classes
                 """
+                echo "Sonar scan completed."
             }
         }
 
@@ -48,15 +49,13 @@ pipeline {
                 script {
                     echo "========== Checking CE Task Status =========="
 
-                    // Extract ceTaskId from sonar-report.txt
                     def ceTaskId = sh(
                         script: "grep -o 'ceTaskId=[A-Za-z0-9_-]*' **/report-task.txt | cut -d= -f2",
                         returnStdout: true
                     ).trim()
 
-                    echo "📌 CE Task ID = ${ceTaskId}"
+                    echo "CE Task ID = ${ceTaskId}"
 
-                    // Poll CE API until SUCCESS
                     def analysisId = ""
                     timeout(time: 2, unit: 'MINUTES') {
                         waitUntil {
@@ -79,7 +78,6 @@ pipeline {
                                     script: "echo '${ce}' | jq -r '.task.analysisId'",
                                     returnStdout: true
                                 ).trim()
-                                echo "📌 Analysis ID = ${analysisId}"
                                 return true
                             }
                             return false
@@ -88,7 +86,6 @@ pipeline {
 
                     echo "========== Fetching Quality Gate =========="
 
-                    // Retrieve Quality Gate Status
                     def qg = sh(
                         script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
                         returnStdout: true
@@ -104,7 +101,7 @@ pipeline {
                     echo "📌 Quality Gate Status = ${qgStatus}"
 
                     if (qgStatus != "OK") {
-                        error "❌ Quality Gate FAILED: ${qgStatus}"
+                        error "❌ Quality Gate FAILED (${qgStatus})"
                     } else {
                         echo "✅ Quality Gate PASSED"
                     }
@@ -118,9 +115,11 @@ pipeline {
             echo "========== Archiving artifacts =========="
             archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
         }
+
         success {
             echo "🎉 BUILD SUCCESS"
         }
+
         failure {
             echo "❌ BUILD FAILED"
         }
