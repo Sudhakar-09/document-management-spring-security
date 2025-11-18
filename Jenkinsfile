@@ -16,7 +16,6 @@ pipeline {
 
   stages {
 
-    /* ------------------------ 1. CHECKOUT ------------------------ */
     stage('Checkout') {
       steps {
         echo "[1/9] Checkout"
@@ -27,7 +26,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 2. BUILD ------------------------ */
     stage('Build') {
       steps {
         echo "[2/9] Build"
@@ -35,7 +33,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 3. SONAR SCAN ------------------------ */
     stage('Sonar Scan') {
       steps {
         echo "[3/9] Running sonar scan"
@@ -53,7 +50,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 4. QUALITY GATE ------------------------ */
     stage('Quality Gate') {
       steps {
         echo "[4/9] Waiting for CE + Quality Gate"
@@ -124,7 +120,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 5. FETCH ISSUES ------------------------ */
     stage('Fetch Issues') {
       steps {
         echo "[5/9] Fetching Sonar issues"
@@ -138,7 +133,6 @@ pipeline {
       }
     }
 
-    /* ------------------------ 6. ENRICH + AI ANALYSIS ------------------------ */
     stage('AI Analysis & Report Generation') {
       steps {
         echo "[6/9] Enriching issues + AI report generation"
@@ -150,7 +144,6 @@ pipeline {
 
           script {
 
-            /* ------------ Read issues JSON ------------ */
             def issuesJson = readFile("${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json")
             def issues = readJSON(text: issuesJson)
 
@@ -192,14 +185,16 @@ Total issues: ${issues.total ?: issues.issues.size()}
 
 ---
 """
-            writeFile file: mdFile, text: summary, append: true
 
-            /* ------------ Process each issue ------------ */
+            def old1 = readFile(mdFile)
+            writeFile file: mdFile, text: old1 + summary
+
+            /* ------------ Issue Loop ------------ */
             def idx = 0
             for (issue in issues.issues) {
               idx++
 
-              /* ---- Prepare snippet ---- */
+              /* Prepare snippet */
               def filepath = issue.component.replace("ai-code-assistant:", "")
               def line = (issue.line ?: 1) as int
               def start = Math.max(1, line - 2)
@@ -209,15 +204,15 @@ Total issues: ${issues.total ?: issues.issues.size()}
                 ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
                 : "// file not found: ${filepath}"
 
-              /* ---- Git blame ---- */
+              /* Git blame */
               def blame = fileExists(filepath)
                 ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
                 : "N/A"
 
-              /* ---- GitHub link ---- */
+              /* Link */
               def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
 
-              /* ---- AI Prompt ---- */
+              /* Prompt */
               def prompt = """
 You are an expert Java developer. Analyze this Sonar issue:
 
@@ -240,11 +235,11 @@ Provide:
 - Git suggestion
 """
 
-              /* ---- Build JSON safely ---- */
+              /* Escape prompt */
               def escaped = prompt
-                    .replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
 
               def json = """
 {
@@ -257,7 +252,7 @@ Provide:
 """
               writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: json
 
-              /* ---- OpenAI API call ---- */
+              /* OpenAI call */
               def aiOut = sh(
                 script: """
                   curl -s -X POST "https://api.openai.com/v1/chat/completions" \
@@ -269,7 +264,7 @@ Provide:
                 returnStdout: true
               ).trim()
 
-              /* ---- Write issue block ---- */
+              /* Write issue block */
               def block = """
 ---
 
@@ -288,7 +283,9 @@ ${snippet.replaceAll("(?m)^", "    ")}
 ${aiOut}
 
 """
-              writeFile file: mdFile, text: block, append: true
+
+              def existing = readFile(mdFile)
+              writeFile file: mdFile, text: existing + block
             }
           }
         }
@@ -299,28 +296,34 @@ ${aiOut}
     stage('Archive Reports') {
       steps {
         echo "[7/9] Archiving reports"
+
+        // Always archive the generated MD report + payloads
         archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
         archiveArtifacts artifacts: "target/*.jar", allowEmptyArchive: true
+
+        echo "Artifacts archived successfully."
       }
     }
 
     /* ------------------------ 8. FINISH ------------------------ */
     stage('Finish') {
       steps {
-        echo "[8/9] Pipeline complete!"
+        echo "[8/9] Pipeline completed successfully!"
+        echo "Download your reports from the 'Artifacts' section."
       }
     }
-  }
+  } // end stages
 
+  /* ------------------------ POST ACTIONS ------------------------ */
   post {
     always {
       echo "Pipeline finished."
     }
     success {
-      echo "SUCCESS"
+      echo "✅ SUCCESS — Build + Code Quality Report Generated!"
     }
     failure {
-      echo "FAILED — Check logs"
+      echo "❌ FAILED — Check logs for errors."
     }
   }
 }
