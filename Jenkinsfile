@@ -27,7 +27,7 @@ pipeline {
 
         stage('Sonar Scan') {
             steps {
-                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
                     echo "[INFO] Using Sonar Token (length=${SONAR_TOKEN.length()})"
 
                     sh """
@@ -46,7 +46,7 @@ pipeline {
             steps {
                 script {
 
-                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
 
                         echo "[INFO] Reading CE Task ID"
                         def ceTaskId = sh(
