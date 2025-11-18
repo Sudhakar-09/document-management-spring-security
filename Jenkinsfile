@@ -282,9 +282,7 @@ Provide:
 **Blame:** ${blame}
 
 #### Code Snippet
-\`\`\`java
-${snippet}
-\`\`\`
+${snippet.replaceAll("(?m)^", "    ")}
 
 #### AI Recommendation
 ${aiOut}
