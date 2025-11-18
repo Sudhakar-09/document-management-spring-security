@@ -6,20 +6,14 @@ pipeline {
         maven 'mvn'
     }
 
-    parameters {
-        string(name: 'SONAR_PROJECT_KEY', defaultValue: 'ai-code-assistant', description: 'Sonar project key')
-    }
-
     environment {
         SONAR_HOST = "http://localhost:9000"
-        SONAR_TOKEN = credentials('sonar-token')
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo "[INFO] Checking out source code"
                 checkout scm
                 sh "ls -lah"
             }
@@ -27,111 +21,85 @@ pipeline {
 
         stage('Build') {
             steps {
-                echo "[INFO] Building project with Maven"
-                sh "mvn clean package -DskipTests"
-                echo "[INFO] Build step completed"
+                sh 'mvn clean package -DskipTests'
             }
         }
 
         stage('Sonar Scan') {
             steps {
-                echo "[INFO] Running SonarQube analysis"
-                sh """
-                    mvn sonar:sonar \
-                        -Dsonar.login=${SONAR_TOKEN} \
-                        -Dsonar.host.url=${SONAR_HOST} \
-                        -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
-                        -Dsonar.sources=src/main/java \
-                        -Dsonar.java.binaries=target/classes
-                """
-                echo "[INFO] Sonar scan triggered successfully"
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    echo "[INFO] Using Sonar Token (length=${SONAR_TOKEN.length()})"
+
+                    sh """
+                        mvn sonar:sonar \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.host.url=${SONAR_HOST} \
+                            -Dsonar.projectKey=ai-code-assistant \
+                            -Dsonar.sources=src/main/java \
+                            -Dsonar.java.binaries=target/classes
+                    """
+                }
             }
         }
 
         stage('Quality Gate') {
             steps {
                 script {
-                    echo "[INFO] Searching for Sonar report-task.txt"
 
-                    // Verify file exists
-                    def report = sh(script: "ls -1 **/report-task.txt 2>/dev/null || true", returnStdout: true).trim()
-                    echo "[DEBUG] report-task.txt located at: ${report}"
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
 
-                    if (!report) {
-                        error "[ERROR] report-task.txt not found. Sonar scan may have failed."
-                    }
+                        echo "[INFO] Reading CE Task ID"
+                        def ceTaskId = sh(
+                            script: "grep ceTaskId **/report-task.txt | cut -d= -f2",
+                            returnStdout: true
+                        ).trim()
 
-                    // Extract ceTaskId
-                    def ceTaskId = sh(
-                        script: "grep ceTaskId ${report} | cut -d= -f2",
-                        returnStdout: true
-                    ).trim()
-                    echo "[INFO] ceTaskId extracted: ${ceTaskId}"
+                        echo "[INFO] CE Task ID = ${ceTaskId}"
 
-                    if (!ceTaskId) {
-                        error "[ERROR] ceTaskId not found in report-task.txt"
-                    }
-
-                    echo "[INFO] Polling SonarQube CE task status..."
-
-                    def analysisId = ""
-                    timeout(time: 5, unit: 'MINUTES') {
+                        def analysisId = ""
                         waitUntil {
-                            def ceResponse = sh(
+                            def ceJson = sh(
                                 script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}",
                                 returnStdout: true
                             ).trim()
 
-                            echo "[DEBUG] CE API response: ${ceResponse}"
-
                             def status = sh(
-                                script: "echo '${ceResponse}' | jq -r '.task.status'",
+                                script: "echo '${ceJson}' | jq -r '.task.status'",
                                 returnStdout: true
                             ).trim()
 
-                            echo "[INFO] CE status = ${status}"
+                            echo "[INFO] CE Status: ${status}"
 
-                            if (status == "SUCCESS") {
+                            if (status == 'SUCCESS') {
                                 analysisId = sh(
-                                    script: "echo '${ceResponse}' | jq -r '.task.analysisId'",
+                                    script: "echo '${ceJson}' | jq -r '.task.analysisId'",
                                     returnStdout: true
                                 ).trim()
-
-                                echo "[INFO] analysisId retrieved: ${analysisId}"
                                 return true
                             }
-
-                            if (status == "FAILED" || status == "CANCELED") {
-                                error "[ERROR] Sonar CE task ended with status: ${status}"
-                            }
-
-                            echo "[INFO] CE task still running, retrying in 5 seconds..."
-                            sleep 5
                             return false
                         }
+
+                        echo "[INFO] Analysis ID = ${analysisId}"
+
+                        def qgJson = sh(
+                            script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
+                            returnStdout: true
+                        ).trim()
+
+                        def qgStatus = sh(
+                            script: "echo '${qgJson}' | jq -r '.projectStatus.status'",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "[INFO] Quality Gate Status = ${qgStatus}"
+
+                        if (qgStatus != "OK") {
+                            error "❌ Quality Gate FAILED (${qgStatus})"
+                        } else {
+                            echo "✅ Quality Gate PASSED"
+                        }
                     }
-
-                    echo "[INFO] CE task completed. Fetching Quality Gate result..."
-
-                    def qgResponse = sh(
-                        script: "curl -s -u ${SONAR_TOKEN}: ${SONAR_HOST}/api/qualitygates/project_status?analysisId=${analysisId}",
-                        returnStdout: true
-                    ).trim()
-
-                    echo "[DEBUG] Quality Gate API response: ${qgResponse}"
-
-                    def qgStatus = sh(
-                        script: "echo '${qgResponse}' | jq -r '.projectStatus.status'",
-                        returnStdout: true
-                    ).trim()
-
-                    echo "[INFO] Quality Gate status = ${qgStatus}"
-
-                    if (qgStatus != "OK") {
-                        error "[ERROR] Quality Gate failed with status: ${qgStatus}"
-                    }
-
-                    echo "[INFO] Quality Gate PASSED"
                 }
             }
         }
@@ -139,9 +107,8 @@ pipeline {
 
     post {
         always {
-            echo "[INFO] Archiving build artifacts"
+            echo "[INFO] Archiving artifacts"
             archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
-            echo "[INFO] Post-build cleanup completed"
         }
     }
 }
