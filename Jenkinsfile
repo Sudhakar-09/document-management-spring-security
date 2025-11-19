@@ -249,9 +249,8 @@ ${snippet}
 **GitHub:** ${github_link}
 
 #### Code Snippet (context: ${start}-${end})
-\`\`\`java
+```java
 ${snippet}
-\`\`\`
 
 #### AI Recommendation
 ${aiOut}
