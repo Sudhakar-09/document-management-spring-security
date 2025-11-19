@@ -109,26 +109,25 @@ pipeline {
         }
       }
     }
+/* ------------------------ 6. AI ANALYSIS ------------------------ */
+stage('AI Analysis & Report Generation') {
+  steps {
+    echo "[6/9] AI Report Generation"
 
-    /* ------------------------ 6. AI ANALYSIS ------------------------ */
-    stage('AI Analysis & Report Generation') {
-      steps {
-        echo "[6/9] AI Report Generation"
+    withCredentials([
+      string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
+      string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
+    ]) {
 
-        withCredentials([
-          string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
-          string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
-        ]) {
+      script {
 
-          script {
+        def issues = readJSON file: "${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
+        def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
 
-            def issues = readJSON file: "${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
-            def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
+        def BT = "```"   // safe, because we quote heredoc
 
-            def BT = "```"   // SAFE backticks
-
-            /* ---- HEADER ---- */
-            writeFile file: mdFile, text: """
+        /* ---- HEADER ---- */
+        writeFile file: mdFile, text: """
 # 🧾 SonarQube Code Quality Report
 
 **Project:** ai-code-assistant  
@@ -141,11 +140,12 @@ pipeline {
 ---
 """
 
-            /* ---- SUMMARY ---- */
-            def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
-            issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
+        /* ---- SUMMARY ---- */
+        def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
+        issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
 
-            sh """cat <<EOF >> ${mdFile}
+        sh """#!/bin/bash
+cat <<'EOF' >> ${mdFile}
 
 ## 📊 Summary
 
@@ -163,28 +163,29 @@ Total issues: ${issues.total ?: issues.issues.size()}
 EOF
 """
 
-            /* ---- ISSUE LOOP ---- */
-            def idx = 0
+        /* ---- ISSUE LOOP ---- */
+        def idx = 0
 
-            for (issue in issues.issues) {
-              idx++
+        for (issue in issues.issues) {
+          idx++
 
-              def filepath = issue.component.replace("ai-code-assistant:", "")
-              def line = (issue.line ?: 1) as int
-              def start = Math.max(1, line - 2)
-              def end = line + 2
+          def filepath = issue.component.replace("ai-code-assistant:", "")
+          def line = (issue.line ?: 1) as int
+          def start = Math.max(1, line - 2)
+          def end = line + 2
 
-              def snippet = fileExists(filepath)
-                ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
-                : "// File not found"
+          def snippet = fileExists(filepath)
+            ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
+            : "// File not found"
 
-              def blame = fileExists(filepath)
-                ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
-                : "N/A"
+          def blame = fileExists(filepath)
+            ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
+            : "N/A"
 
-              def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
+          def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
 
-              def prompt = """
+          /* ---- AI Prompt ---- */
+          def prompt = """
 Analyze this Sonar issue.
 Rule: ${issue.rule}
 Message: ${issue.message}
@@ -204,26 +205,35 @@ Provide:
 - Risk score
 """
 
-              def payload = groovy.json.JsonOutput.toJson([
-                model: "gpt-4.1-mini",
-                messages: [[role: "user", content: prompt]]
-              ])
+          /* ---- JSON PAYLOAD ---- */
+          def payload = groovy.json.JsonOutput.toJson([
+            model: "gpt-4.1-mini",
+            messages: [[role: "user", content: prompt]],
+            max_tokens: 800
+          ])
 
-              writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
+          writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
 
-              def aiOut = sh(
-                script: """
-                  curl -s -X POST https://api.openai.com/v1/chat/completions \
-                    -H "Authorization: Bearer \$OPENAI_KEY" \
-                    -H "Content-Type: application/json" \
-                    -d @${REPORT_DIR}/payload-${idx}.json | jq -r '.choices[0].message.content'
-                """,
-                returnStdout: true
-              ).trim()
+          /* ---- CALL OPENAI SAFELY ---- */
+          def aiOut = sh(
+            script: """#!/bin/bash
+set -e
+set -o pipefail
 
-              def indented = snippet.replaceAll("(?m)^", "    ")
+curl -s -X POST https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer ${OPENAI_KEY}" \
+  -H "Content-Type: application/json" \
+  -d @${REPORT_DIR}/payload-${idx}.json \
+  | jq -r '.choices[0].message.content'
+""",
+            returnStdout: true
+          ).trim()
 
-              sh """cat <<EOF >> ${mdFile}
+          def indented = snippet.replaceAll("(?m)^", "    ")
+
+          /* ---- APPEND ISSUE BLOCK ---- */
+          sh """#!/bin/bash
+cat <<'EOF' >> ${mdFile}
 
 ---
 
@@ -244,11 +254,11 @@ ${aiOut}
 
 EOF
 """
-            }
-          }
         }
       }
     }
+  }
+}
 
     /* ------------------------ 7. ARCHIVE ------------------------ */
     stage('Archive Reports') {
