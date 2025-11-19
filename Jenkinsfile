@@ -12,7 +12,7 @@ pipeline {
     REPO_ORG    = "Sudhakar-09"
     REPO_NAME   = "document-management-spring-security"
     REPO_BRANCH = "main"
-    MAX_ISSUES_PROCESS = "0"
+    MAX_ISSUES_PROCESS = "20"
   }
 
   stages {
