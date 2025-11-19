@@ -221,7 +221,7 @@ set -e
 set -o pipefail
 
 curl -s -X POST https://api.openai.com/v1/chat/completions \
-  -H "Authorization: Bearer ${OPENAI_KEY}" \
+  -H "Authorization: Bearer $OPENAI_KEY" \
   -H "Content-Type: application/json" \
   -d @${REPORT_DIR}/payload-${idx}.json \
   | jq -r '.choices[0].message.content'
