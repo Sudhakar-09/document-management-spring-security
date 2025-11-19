@@ -89,7 +89,7 @@ pipeline {
               returnStdout: true
             ).trim()
 
-            writeFile file: "${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json", text: qgJson
+            writeFile file: "$WORKSPACE/${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json", text: qgJson
             echo "Quality Gate JSON stored."
           }
         }
@@ -104,28 +104,32 @@ pipeline {
           sh """
             curl -s -u \$SONAR_TOKEN: \
               "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
-              > ${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json
+              > "$WORKSPACE/${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
           """
         }
       }
     }
-/* ------------------------ 6. AI ANALYSIS ------------------------ */
-stage('AI Analysis & Report Generation') {
-  steps {
-    echo "[6/9] AI Report Generation"
 
-    withCredentials([
-      string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
-      string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
-    ]) {
+    /* ------------------------ 6. AI ANALYSIS ------------------------ */
+    stage('AI Analysis & Report Generation') {
+      steps {
+        echo "[6/9] AI Report Generation"
 
-      script {
-        def issues = readJSON file: "${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
-        def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
-        def BT = "```"
+        withCredentials([
+          string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
+          string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
+        ]) {
 
-        /* ---- HEADER ---- */
-        writeFile file: mdFile, text: """
+          script {
+
+            sh "mkdir -p $WORKSPACE/${REPORT_DIR}"
+
+            def issues = readJSON file: "$WORKSPACE/${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
+            def mdFile = "$WORKSPACE/${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
+            def BT = "```"
+
+            /* ---- HEADER ---- */
+            writeFile file: mdFile, text: """
 # 🧾 SonarQube Code Quality Report
 
 **Project:** ai-code-assistant  
@@ -138,12 +142,12 @@ stage('AI Analysis & Report Generation') {
 ---
 """
 
-        /* ---- SUMMARY ---- */
-        def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
-        issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
+            /* ---- SUMMARY ---- */
+            def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
+            issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
 
-        sh """#!/bin/bash
-cat <<'EOF' >> ${mdFile}
+            sh """#!/bin/bash
+cat <<'EOF' >> "${mdFile}"
 
 ## 📊 Summary
 
@@ -161,29 +165,27 @@ Total issues: ${issues.total ?: issues.issues.size()}
 EOF
 """
 
-        /* ---- LOOP OVER ISSUES ---- */
-        def idx = 0
+            /* ---- LOOP ---- */
+            def idx = 0
 
-        for (issue in issues.issues) {
-          idx++
+            for (issue in issues.issues) {
+              idx++
 
-          def filepath = issue.component.replace("ai-code-assistant:", "")
-          def line = (issue.line ?: 1) as int
-          def start = Math.max(1, line - 2)
-          def end = line + 2
+              def filepath = issue.component.replace("ai-code-assistant:", "")
+              def line = (issue.line ?: 1) as int
+              def start = Math.max(1, line - 2)
+              def end = line + 2
 
-          def snippet = fileExists(filepath)
-            ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
-            : "// File not found"
+              def snippet = fileExists(filepath)
+                ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
+                : "// File not found"
 
-          def blame = fileExists(filepath)
-            ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
-            : "N/A"
+              def blame = fileExists(filepath)
+                ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
+                : "N/A"
 
-          def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
-
-          /* ---- AI PROMPT ---- */
-          def prompt = """
+              /* ---- MAKE PAYLOAD ---- */
+              def prompt = """
 Analyze this Sonar issue.
 Rule: ${issue.rule}
 Message: ${issue.message}
@@ -203,44 +205,44 @@ Provide:
 - Risk score
 """
 
-          /* ---- JSON PAYLOAD ---- */
-          def payload = groovy.json.JsonOutput.toJson([
-            model: "gpt-4.1-mini",
-            messages: [[role: "user", content: prompt]],
-            max_tokens: 800
-          ])
+              def payloadFile = "$WORKSPACE/${REPORT_DIR}/payload-${idx}.json"
+              writeFile file: payloadFile, text: groovy.json.JsonOutput.toJson([
+                model: "gpt-4.1-mini",
+                messages: [[role: "user", content: prompt]],
+                max_tokens: 800
+              ])
 
-          writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
-
-          /* ---- SAFE AI CALL (NO SECRET LEAKING) ---- */
-          def aiOut = sh(
-            script: '''#!/bin/bash
+              /* ---- SAFE OPENAI CALL ---- */
+              def aiOut = sh(
+                script: """#!/bin/bash
 set -e
-set -o pipefail
 
-curl -s -X POST https://api.openai.com/v1/chat/completions \
-  -H "Authorization: Bearer $OPENAI_KEY" \
-  -H "Content-Type: application/json" \
-  -d @"'"${REPORT_DIR}/payload-${idx}.json"'" \
+if [ ! -f "${payloadFile}" ]; then
+  echo "ERROR: Payload file does not exist: ${payloadFile}"
+  exit 1
+fi
+
+curl -s -X POST https://api.openai.com/v1/chat/completions \\
+  -H "Authorization: Bearer \$OPENAI_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d @"${payloadFile}" \\
   | jq -r '.choices[0].message.content'
-''',
-            returnStdout: true
-          ).trim()
+""",
+                returnStdout: true
+              ).trim()
 
-          def indented = snippet.replaceAll("(?m)^", "    ")
+              def indented = snippet.replaceAll("(?m)^", "    ")
 
-          /* ---- APPEND ISSUE BLOCK TO REPORT ---- */
-          sh """#!/bin/bash
-cat <<'EOF' >> ${mdFile}
+              /* ---- WRITE ISSUE RESULTS ---- */
+              sh """#!/bin/bash
+cat <<'EOF' >> "${mdFile}"
 
 ---
 
 ### Issue ${idx} — **${issue.severity}**
 **Message:** ${issue.message}  
-**File:** ${filepath}  
 **Line:** ${line}  
-**Blame:** ${blame}  
-**GitHub:** ${link}
+**Blame:** ${blame}
 
 #### Code Snippet
 ${BT}java
@@ -252,12 +254,11 @@ ${aiOut}
 
 EOF
 """
-        } // END loop
+            }
+          }
+        }
       }
     }
-  }
-}
-
 
     /* ------------------------ 7. ARCHIVE ------------------------ */
     stage('Archive Reports') {
