@@ -120,11 +120,9 @@ stage('AI Analysis & Report Generation') {
     ]) {
 
       script {
-
         def issues = readJSON file: "${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
         def mdFile = "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
-
-        def BT = "```"   // safe, because we quote heredoc
+        def BT = "```"
 
         /* ---- HEADER ---- */
         writeFile file: mdFile, text: """
@@ -163,7 +161,7 @@ Total issues: ${issues.total ?: issues.issues.size()}
 EOF
 """
 
-        /* ---- ISSUE LOOP ---- */
+        /* ---- LOOP OVER ISSUES ---- */
         def idx = 0
 
         for (issue in issues.issues) {
@@ -184,7 +182,7 @@ EOF
 
           def link = "https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${start}-L${end}"
 
-          /* ---- AI Prompt ---- */
+          /* ---- AI PROMPT ---- */
           def prompt = """
 Analyze this Sonar issue.
 Rule: ${issue.rule}
@@ -214,24 +212,24 @@ Provide:
 
           writeFile file: "${REPORT_DIR}/payload-${idx}.json", text: payload
 
-          /* ---- CALL OPENAI SAFELY ---- */
+          /* ---- SAFE AI CALL (NO SECRET LEAKING) ---- */
           def aiOut = sh(
-            script: """#!/bin/bash
+            script: '''#!/bin/bash
 set -e
 set -o pipefail
 
 curl -s -X POST https://api.openai.com/v1/chat/completions \
   -H "Authorization: Bearer $OPENAI_KEY" \
   -H "Content-Type: application/json" \
-  -d @${REPORT_DIR}/payload-${idx}.json \
+  -d @"'"${REPORT_DIR}/payload-${idx}.json"'" \
   | jq -r '.choices[0].message.content'
-""",
+''',
             returnStdout: true
           ).trim()
 
           def indented = snippet.replaceAll("(?m)^", "    ")
 
-          /* ---- APPEND ISSUE BLOCK ---- */
+          /* ---- APPEND ISSUE BLOCK TO REPORT ---- */
           sh """#!/bin/bash
 cat <<'EOF' >> ${mdFile}
 
@@ -254,11 +252,12 @@ ${aiOut}
 
 EOF
 """
-        }
+        } // END loop
       }
     }
   }
 }
+
 
     /* ------------------------ 7. ARCHIVE ------------------------ */
     stage('Archive Reports') {
