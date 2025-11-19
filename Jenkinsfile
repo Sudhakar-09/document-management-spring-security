@@ -129,127 +129,115 @@ echo "Issues stored at $OUT"
       }
     }
 
-    stage('AI Analysis & Report Generation') {
-      steps {
-        echo "[6/9] AI Report Generation (FAST + OLD + NEW)"
-        withCredentials([string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'), string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-          sh '''#!/bin/bash
+   stage('AI Analysis & Report Generation') {
+  steps {
+    echo "[6/9] AI Report Generation (FAST + OLD + NEW) -- verbose"
+    withCredentials([string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
+                     string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
+      sh '''#!/bin/bash
 set -euo pipefail
+set -x
 
+REPORT_DIR="${REPORT_DIR:-code-quality-reports}"
 ISSUES_FILE="${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
 MD_FILE="${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
-MAX=${MAX_ISSUES_PROCESS}
+LOG_FILE="${REPORT_DIR}/ai-stage-${BUILD_NUMBER}.log"
+MAX=${MAX_ISSUES_PROCESS:-20}
 
-if [ ! -f "$ISSUES_FILE" ]; then
-  echo "No issues file found: $ISSUES_FILE"
-  exit 0
-fi
+# ensure report dir
+mkdir -p "${REPORT_DIR}"
 
-# header
-cat > "$MD_FILE" <<'MD'
-# SonarQube Code Quality Report
+# redirect all stdout/stderr to a log too (so Jenkins shows it as artifact)
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
-**Project:** ai-code-assistant
-**Repository:** ${REPO_ORG}/${REPO_NAME}
-**Branch:** ${REPO_BRANCH}
-**Build:** ${BUILD_NUMBER}
-**Generated:** $(date '+%Y-%m-%d %H:%M:%S')
+echo "AI stage log: ${LOG_FILE}"
+echo "ISSUES_FILE=${ISSUES_FILE}"
+[ -f "${ISSUES_FILE}" ] || { echo "No issues file: ${ISSUES_FILE}"; exit 0; }
 
----
+# Minimal header
+cat > "${MD_FILE}" <<'MD'
+# SonarQube Code Quality Report (generated)
 MD
 
-# quick summary (by severity) - human readable
-jq -r '[.issues[]?.severity] | group_by(.) | map({(.[0]): length}) | add' "$ISSUES_FILE" > "${REPORT_DIR}/severity-summary.json" || true
+# quick severity summary
+jq -r '[.issues[]?.severity] | group_by(.) | map({(.[0]): length}) | add' "${ISSUES_FILE}" > "${REPORT_DIR}/severity-summary.json" || true
+echo -e "\n## Summary (by severity)\n" >> "${MD_FILE}"
+jq -r 'to_entries[] | "- "+.key+": "+(.value|tostring)' "${REPORT_DIR}/severity-summary.json" >> "${MD_FILE}" 2>/dev/null || true
 
-# append summary
-cat >> "$MD_FILE" <<'MD'
-## Summary (count by severity)
-
-MD
-jq -r 'to_entries[] | "- "+.key+": "+(.value|tostring)' "${REPORT_DIR}/severity-summary.json" >> "$MD_FILE" 2>/dev/null || true
-
-# iterate issues (bash loop, limited by MAX)
+# iterate issues
 count=0
-jq -c '.issues[]' "$ISSUES_FILE" | while read -r issue; do
+jq -c '.issues[]' "${ISSUES_FILE}" | while IFS= read -r issue; do
   count=$((count+1))
-  if [ "$MAX" -gt 0 ] && [ "$count" -gt "$MAX" ]; then
-    echo "Reached MAX ($MAX) issues. Skipping remaining..."
+  if [ "${MAX}" -gt 0 ] && [ "${count}" -gt "${MAX}" ]; then
+    echo "Reached MAX (${MAX}) issues, stopping." 
     break
   fi
 
-  # extract fields safely
-  rule=$(echo "$issue" | jq -r '.rule // "-"')
-  message=$(echo "$issue" | jq -r '.message // "-"')
-  severity=$(echo "$issue" | jq -r '.severity // "INFO"')
-  component=$(echo "$issue" | jq -r '.component')
-  # component looks like ai-code-assistant:src/main/java/... -> strip prefix after last colon
-  filepath=$(echo "$component" | sed 's/^[^:]*://')
-  line=$(echo "$issue" | jq -r '.line // 1')
-  issue_id=$(echo "$issue" | jq -r '.key // ""')
+  rule=$(echo "${issue}" | jq -r '.rule // "-"')
+  message=$(echo "${issue}" | jq -r '.message // "-"')
+  severity=$(echo "${issue}" | jq -r '.severity // "INFO"')
+  component=$(echo "${issue}" | jq -r '.component // "-"')
+  filepath=$(echo "${component}" | sed 's/^[^:]*://')
+  line=$(echo "${issue}" | jq -r '.line // 1')
+  issue_id=$(echo "${issue}" | jq -r '.key // ""')
 
-  # compute snippet window (default: line-2 .. line+2)
+  # snippet window (default 2 lines around)
   start=$(( line > 2 ? line-2 : 1 ))
   end=$(( line + 2 ))
 
   snippet="// File not found"
-  if [ -f "$filepath" ]; then
-    snippet=$(sed -n "${start},${end}p" "$filepath" || true)
+  if [ -f "${filepath}" ]; then
+    snippet=$(sed -n "${start},${end}p" "${filepath}" || true)
   fi
 
   blame="N/A"
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -f "$filepath" ]; then
-    blame=$(git blame -L ${line},${line} -- "$filepath" 2>/dev/null || echo "N/A")
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -f "${filepath}" ]; then
+    blame=$(git blame -L ${line},${line} -- "${filepath}" 2>/dev/null || echo "N/A")
   fi
 
   github_link="https://github.com/${REPO_ORG}/${REPO_NAME}/blob/${REPO_BRANCH}/${filepath}#L${line}"
 
-  # Prepare prompt for AI (concise)
-  read -r -d '' PROMPT <<'PROMPT'
-Analyze this Sonar issue. Provide:
-- Short summary (1-2 lines)
-- Root cause (1-2 lines)
-- Fix (show new code snippet / minimal patch)
-- Priority (P1/P2/P3)
-- Risk (low/medium/high)
-Also include an "OLD CODE" and "NEW CODE" section. Keep response compact.
-
-Rule: __RULE__
-Message: __MSG__
-Severity: __SEV__
-File: __FILE__
-Line: __LINE__
-
+  # build a safe compact prompt (avoid weird expansions)
+  PROMPT="Analyze this Sonar issue. Provide: 1) Short summary (1-2 lines) 2) Root cause 3) Fix (show OLD CODE and NEW CODE minimal patch) 4) Priority 5) Risk.
+Rule: ${rule}
+Message: ${message}
+Severity: ${severity}
+File: ${filepath}
+Line: ${line}
 Code context:
-__SNIPPET__
-PROMPT
+${snippet}
+"
 
-  # substitute placeholders (use bash parameter expansion safely)
-  PROMPT=${PROMPT//'__RULE__'/$rule}
-  PROMPT=${PROMPT//'__MSG__'/$message}
-  PROMPT=${PROMPT//'__SEV__'/$severity}
-  PROMPT=${PROMPT//'__FILE__'/$filepath}
-  PROMPT=${PROMPT//'__LINE__'/$line}
-  # insert snippet, ensure no EOF collision
-  PROMPT=${PROMPT//'__SNIPPET__'/$snippet}
+  # prepare payload file (escape JSON safely using jq)
+  printf '%s' "${PROMPT}" | jq -Rs '{model:"gpt-4o-mini", messages:[{role:"user", content:.}], max_tokens:700}' > "${REPORT_DIR}/payload-${count}.json
 
-  # create payload
-  cat > "${REPORT_DIR}/payload-${count}.json" <<PAY
-{
-  "model": "gpt-4o-mini",
-  "messages": [{"role":"user","content": ${PROMPT@Q}}],
-  "max_tokens": 700
-}
-PAY
+  aiOut="(skipped)"
+  if [ -z "${OPENAI_KEY}" ]; then
+    echo "OPENAI_KEY not provided; skipping OpenAI call for issue ${count}"
+    aiOut="(OPENAI_KEY missing; no AI output)"
+  else
+    # call OpenAI -- capture HTTP response and errors
+    http_resp=$(curl -sS -w "\n%{http_code}" -X POST "https://api.openai.com/v1/chat/completions" \
+       -H "Authorization: Bearer ${OPENAI_KEY}" \
+       -H "Content-Type: application/json" \
+       --data-binary @"${REPORT_DIR}/payload-${count}.json" ) || true
 
-  # call OpenAI (single-shot, minimal tokens)
-  aiOut=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
-    -H "Authorization: Bearer $OPENAI_KEY" \
-    -H "Content-Type: application/json" \
-    -d @"${REPORT_DIR}/payload-${count}.json" \
-    | jq -r '.choices[0].message.content // "(no AI response)"') || aiOut="(AI call failed)"
+    # split body and code
+    http_code=$(echo "${http_resp}" | tail -n1)
+    http_body=$(echo "${http_resp}" | sed '$d' || true)
+
+    if [ "${http_code}" = "200" ] || [ "${http_code}" = "201" ]; then
+      aiOut=$(echo "${http_body}" | jq -r '.choices[0].message.content // "(no AI response)"' 2>/dev/null || echo "(parse error)")
+    else
+      echo "OpenAI call failed (HTTP ${http_code}) for issue ${count}; body follows:"
+      echo "${http_body}"
+      aiOut="(OpenAI call failed HTTP ${http_code})"
+      # do not exit on OpenAI failure; record and continue
+    fi
+  fi
 
   # append to markdown
-  cat >> "$MD_FILE" <<EOF
+  cat >> "${MD_FILE}" <<EOF
 
 ---
 
@@ -261,9 +249,9 @@ PAY
 **GitHub:** ${github_link}
 
 #### Code Snippet (context: ${start}-${end})
-```java
+\`\`\`java
 ${snippet}
-```
+\`\`\`
 
 #### AI Recommendation
 ${aiOut}
@@ -272,24 +260,21 @@ EOF
 
 done
 
-# final insights - simple stats
-cat >> "$MD_FILE" <<'MD'
+# final notes
+cat >> "${MD_FILE}" <<'MD'
 
 ---
 
 ## Insights & Next steps
-- Report generated automatically. Fix high-severity issues first.
-- Use IDE refactor tools for renames (packages/methods) to avoid missing references.
-- Consider lowering MAX_ISSUES_PROCESS to speed up runs further or run full analysis nightly.
-
+- This report contains AI suggestions where available. If AI calls are skipped, run with OPENAI_KEY configured.
+- To speed up runs: reduce MAX_ISSUES_PROCESS env var or run full AI nightly instead of on every commit.
 MD
 
-echo "Report generation complete: $MD_FILE"
+echo "AI stage finished; artifacts: ${MD_FILE} and ${LOG_FILE}"
 '''
-        }
-      }
     }
-
+  }
+}
     stage('Archive Reports') {
       steps {
         echo "[7/9] Archiving"
