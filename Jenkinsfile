@@ -12,7 +12,7 @@ pipeline {
     REPO_ORG    = "Sudhakar-09"
     REPO_NAME   = "document-management-spring-security"
     REPO_BRANCH = "main"
-    MAX_ISSUES_PROCESS = "0"   // reduce to speed up AI stage; set to 0 to process all
+    MAX_ISSUES_PROCESS = "20"   // reduce to speed up AI stage; set to 0 to process all
   }
 
   stages {
@@ -261,9 +261,9 @@ PAY
 **GitHub:** ${github_link}
 
 #### Code Snippet (context: ${start}-${end})
-\`\`\`java
+```java
 ${snippet}
-\`\`\`
+```
 
 #### AI Recommendation
 ${aiOut}
