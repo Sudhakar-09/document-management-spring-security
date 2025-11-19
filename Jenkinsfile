@@ -22,8 +22,6 @@ pipeline {
         echo "[1/9] Checkout"
         checkout scm
         sh "mkdir -p ${REPORT_DIR}"
-        sh "git --version || true"
-        sh "jq --version || true"
       }
     }
 
@@ -67,21 +65,16 @@ pipeline {
 
             if (!ceTaskId) error "CE Task ID NOT FOUND"
 
-            echo "CE Task ID = ${ceTaskId}"
-
             timeout(time: 5, unit: 'MINUTES') {
               waitUntil {
                 def resp = sh(script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}", returnStdout: true).trim()
                 def status = sh(script: "echo '${resp}' | jq -r '.task.status'", returnStdout: true).trim()
-
-                echo "CE Status = ${status}"
                 return (status == "SUCCESS" || status == "FAILED")
               }
             }
 
             def finalResp = sh(script: "curl -s -u \$SONAR_TOKEN: ${SONAR_HOST}/api/ce/task?id=${ceTaskId}", returnStdout: true).trim()
             def analysisId = sh(script: "echo '${finalResp}' | jq -r '.task.analysisId'", returnStdout: true).trim()
-
             env.ANALYSIS_ID = analysisId
 
             def qgJson = sh(
@@ -89,8 +82,7 @@ pipeline {
               returnStdout: true
             ).trim()
 
-            writeFile file: "$WORKSPACE/${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json", text: qgJson
-            echo "Quality Gate JSON stored."
+            writeFile file: "${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json", text: qgJson
           }
         }
       }
@@ -104,157 +96,113 @@ pipeline {
           sh """
             curl -s -u \$SONAR_TOKEN: \
               "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
-              > "$WORKSPACE/${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
+              > ${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json
           """
         }
       }
     }
 
-    /* ------------------------ 6. AI ANALYSIS ------------------------ */
+    /* ------------------------ 6. FAST AI ANALYSIS ------------------------ */
     stage('AI Analysis & Report Generation') {
       steps {
-        echo "[6/9] AI Report Generation"
+        echo "[6/9] AI Report Generation (FAST + OLD + NEW)"
 
-        withCredentials([
-          string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
-          string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
-        ]) {
-
+        withCredentials([string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY')]) {
           script {
 
-            sh "mkdir -p $WORKSPACE/${REPORT_DIR}"
+            def issues = readJSON file: "${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
 
-            def issues = readJSON file: "$WORKSPACE/${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
-            def mdFile = "$WORKSPACE/${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md"
-            def BT = "```"
+            // Load all source code once (FAST)
+            def sourceCache = [:]
+            new File("src/main/java").eachFileRecurse { f ->
+              if (f.isFile() && f.name.endsWith(".java")) {
+                sourceCache[f.path] = f.readLines()
+              }
+            }
 
-            /* ---- HEADER ---- */
-            writeFile file: mdFile, text: """
-# 🧾 SonarQube Code Quality Report
+            // Build compact issue list
+            def issueList = []
+            int idx = 0
 
-**Project:** ai-code-assistant  
-**Repository:** ${REPO_ORG}/${REPO_NAME}  
-**Branch:** ${REPO_BRANCH}  
-**Build:** ${BUILD_NUMBER}  
-**Generated:** ${new Date().format("yyyy-MM-dd HH:mm:ss")}  
-**Analysis ID:** ${env.ANALYSIS_ID}  
-
----
-"""
-
-            /* ---- SUMMARY ---- */
-            def counts = [BLOCKER:0, CRITICAL:0, MAJOR:0, MINOR:0, INFO:0]
-            issues.issues.each { i -> counts[(i.severity ?: "INFO")]++ }
-
-            sh """#!/bin/bash
-cat <<'EOF' >> "${mdFile}"
-
-## 📊 Summary
-
-| Severity | Emoji | Count |
-|---------|:-----:|------:|
-| Blocker | 🟥 | ${counts.BLOCKER} |
-| Critical | 🔴 | ${counts.CRITICAL} |
-| Major | 🟠 | ${counts.MAJOR} |
-| Minor | 🟡 | ${counts.MINOR} |
-| Info | 🔵 | ${counts.INFO} |
-
-Total issues: ${issues.total ?: issues.issues.size()}
-
----
-EOF
-"""
-
-            /* ---- LOOP ---- */
-            def idx = 0
-
-            for (issue in issues.issues) {
+            issues.issues.each { issue ->
               idx++
-
-              def filepath = issue.component.replace("ai-code-assistant:", "")
+              def filePath = issue.component.replace("ai-code-assistant:", "")
               def line = (issue.line ?: 1) as int
-              def start = Math.max(1, line - 2)
-              def end = line + 2
 
-              def snippet = fileExists(filepath)
-                ? sh(script: "sed -n '${start},${end}p' ${filepath}", returnStdout: true)
-                : "// File not found"
+              def snippet = "N/A"
+              if (sourceCache.containsKey(filePath)) {
+                def lines = sourceCache[filePath]
+                def start = Math.max(1, line - 1)
+                def end = Math.min(lines.size(), line + 1)
+                snippet = lines.subList(start - 1, end).join("\n")
+              }
 
-              def blame = fileExists(filepath)
-                ? sh(script: "git blame -L ${line},${line} -- ${filepath}", returnStdout: true)
-                : "N/A"
+              issueList << [
+                id      : idx,
+                severity: issue.severity,
+                rule    : issue.rule,
+                message : issue.message,
+                file    : filePath,
+                line    : line,
+                snippet : snippet
+              ]
+            }
 
-              /* ---- MAKE PAYLOAD ---- */
-              def prompt = """
-Analyze this Sonar issue.
-Rule: ${issue.rule}
-Message: ${issue.message}
-Severity: ${issue.severity}
-File: ${filepath}
-Line: ${line}
+            // Full AI Prompt
+            def prompt = """
+You are a senior Java + SonarQube auditor.
 
-Snippet:
-${snippet}
+Produce a MARKDOWN REPORT that includes BOTH STYLES:
 
-Provide:
-- Summary
-- Root cause
-- Fix (with code block)
-- Priority
-- Time estimate
-- Risk score
+============================================================
+## 1️⃣ EXECUTIVE SUMMARY (NEW STYLE)
+- Overall quality rating
+- Major risks
+- 5 most important issues
+- Suggested refactors
+- Score out of 10
+
+============================================================
+## 2️⃣ DETAILED ISSUE ANALYSIS (OLD STYLE)
+For EACH issue below:
+- Issue ID
+- Severity (with emoji)
+- Rule
+- Message
+- File + line
+- 3-line code snippet in a Java block
+- Detailed analysis (root cause)
+- Fix explanation
+- Effort estimate
+- Risk level
+
+============================================================
+## 3️⃣ FINAL RECOMMENDATIONS (NEW STYLE)
+High-level actions to improve the repo.
+
+============================================================
+### ISSUES:
+${groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(issueList))}
 """
 
-              def payloadFile = "$WORKSPACE/${REPORT_DIR}/payload-${idx}.json"
-              writeFile file: payloadFile, text: groovy.json.JsonOutput.toJson([
-                model: "gpt-4.1-mini",
-                messages: [[role: "user", content: prompt]],
-                max_tokens: 800
-              ])
+            def payload = groovy.json.JsonOutput.toJson([
+              model: "gpt-4.1-mini",
+              messages: [[role: "user", content: prompt]],
+              max_tokens: 6000
+            ])
 
-              /* ---- SAFE OPENAI CALL ---- */
-              def aiOut = sh(
-                script: """#!/bin/bash
-set -e
-
-if [ ! -f "${payloadFile}" ]; then
-  echo "ERROR: Payload file does not exist: ${payloadFile}"
-  exit 1
-fi
-
-curl -s -X POST https://api.openai.com/v1/chat/completions \\
-  -H "Authorization: Bearer \$OPENAI_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d @"${payloadFile}" \\
+            def aiOut = sh(
+              script: """#!/bin/bash
+curl -s -X POST https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer \$OPENAI_KEY" \
+  -H "Content-Type: application/json" \
+  -d '${payload}' \
   | jq -r '.choices[0].message.content'
 """,
-                returnStdout: true
-              ).trim()
+              returnStdout: true
+            ).trim()
 
-              def indented = snippet.replaceAll("(?m)^", "    ")
-
-              /* ---- WRITE ISSUE RESULTS ---- */
-              sh """#!/bin/bash
-cat <<'EOF' >> "${mdFile}"
-
----
-
-### Issue ${idx} — **${issue.severity}**
-**Message:** ${issue.message}  
-**Line:** ${line}  
-**Blame:** ${blame}
-
-#### Code Snippet
-${BT}java
-${indented}
-${BT}
-
-#### AI Recommendation
-${aiOut}
-
-EOF
-"""
-            }
+            writeFile file: "${REPORT_DIR}/code-quality-report-${BUILD_NUMBER}.md", text: aiOut
           }
         }
       }
@@ -265,15 +213,12 @@ EOF
       steps {
         echo "[7/9] Archiving"
         archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
-        archiveArtifacts artifacts: "target/*.jar", allowEmptyArchive: true
       }
     }
 
     /* ------------------------ 8. FINISH ------------------------ */
     stage('Finish') {
-      steps {
-        echo "[8/9] Pipeline Complete!"
-      }
+      steps { echo "[8/9] Pipeline Complete!" }
     }
   }
 
