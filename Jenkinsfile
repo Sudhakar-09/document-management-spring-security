@@ -269,6 +269,12 @@ ${snippet}
 #### AI Recommendation
 ${aiOut}
 
+---
+## End of Report
+
+Generated automatically by CI pipeline.  
+Please review the above findings and apply the recommended fixes.
+
 EOF
 
 done
