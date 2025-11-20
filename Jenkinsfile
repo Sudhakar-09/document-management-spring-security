@@ -165,37 +165,41 @@ Generated: $(date '+%Y-%m-%d %H:%M:%S')
 ---
 EOF
 
+
 # -------------------------------------------------
-# SUMMARY (WITH EMOJI + COUNT)
+# SUMMARY (Severity + Emoji + Dynamic Counts)
 # -------------------------------------------------
 echo "[AI] Computing summary..."
 
+# Generate severity summary JSON
 jq -r '[.issues[]?.severity] | group_by(.) | map({(.[0]): length}) | add' \
   "$ISSUES_FILE" > "${REPORT_DIR}/severity-summary.json"
 
-BLOCKER=0
+# Read dynamic values (default 0 if key not present)
+BLOCKER=$(jq '.Blocker // 0' "${REPORT_DIR}/severity-summary.json")
 CRITICAL=$(jq '.Critical // 0' "${REPORT_DIR}/severity-summary.json")
 MAJOR=$(jq '.Major // 0' "${REPORT_DIR}/severity-summary.json")
 MINOR=$(jq '.Minor // 0' "${REPORT_DIR}/severity-summary.json")
 INFO=$(jq '.INFO // 0' "${REPORT_DIR}/severity-summary.json")
 
 TOTAL=$((BLOCKER + CRITICAL + MAJOR + MINOR + INFO))
+
+# Write markdown summary
 cat >> "${MD_FILE}" <<EOF
 
 ## Summary
 
-| Severity       | Count |
-|----------------|------:|
-| Blocker 🟥     | ${BLOCKER} |
-| Critical 🔴    | ${CRITICAL} |
-| Major 🟠       | ${MAJOR} |
-| Minor 🟡       | ${MINOR} |
-| Info 🔵        | ${INFO} |
+| Severity        | Count |
+|-----------------|------:|
+| Blocker 🟥       | ${BLOCKER} |
+| Critical 🔴      | ${CRITICAL} |
+| Major 🟠         | ${MAJOR} |
+| Minor 🟡         | ${MINOR} |
+| Info 🔵          | ${INFO} |
 
 Total issues: ${TOTAL}
 
 EOF
-
 
 
 # -------------------------------------------------
