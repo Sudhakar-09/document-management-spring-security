@@ -20,38 +20,47 @@ pipeline {
     /* ---------------------- 1. CHECKOUT ---------------------- */
     stage('Checkout') {
       steps {
-        echo "[1/9] Checkout"
+        echo "[1/9] Checkout started"
         checkout scm
-        sh 'mkdir -p "${REPORT_DIR}"'
-        sh 'git --version || true'
-        sh 'jq --version || true'
+        sh '''
+          echo "[CHECKOUT] Creating report directory..."
+          mkdir -p "${REPORT_DIR}"
+          echo "[CHECKOUT] Git Version:"
+          git --version || true
+          echo "[CHECKOUT] jq Version:"
+          jq --version || true
+        '''
       }
     }
 
     /* ---------------------- 2. BUILD ------------------------- */
     stage('Build') {
       steps {
-        echo "[2/9] Build"
-        sh 'mvn clean package -DskipTests'
+        echo "[2/9] Build started"
+        sh '''
+          echo "[BUILD] Running Maven..."
+          mvn clean package -DskipTests
+          echo "[BUILD] Build completed."
+        '''
       }
     }
 
     /* ---------------------- 3. SONAR SCAN -------------------- */
     stage('Sonar Scan') {
       steps {
-        echo "[3/9] Sonar Scan"
+        echo "[3/9] Sonar Scan started"
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-          sh '''#!/bin/bash
-set -euo pipefail
-
-mvn sonar:sonar \
-  -Dsonar.token="$SONAR_TOKEN" \
-  -Dsonar.host.url="${SONAR_HOST}" \
-  -Dsonar.projectKey=ai-code-assistant \
-  -Dsonar.sources=src/main/java \
-  -Dsonar.java.binaries=target/classes \
-  -Dsonar.projectName="AI Code Assistant"
-'''
+          sh '''
+            echo "[SONAR] Executing sonar:sonar..."
+            mvn sonar:sonar \
+              -Dsonar.token="$SONAR_TOKEN" \
+              -Dsonar.host.url="${SONAR_HOST}" \
+              -Dsonar.projectKey=ai-code-assistant \
+              -Dsonar.sources=src/main/java \
+              -Dsonar.java.binaries=target/classes \
+              -Dsonar.projectName="AI Code Assistant"
+            echo "[SONAR] Sonar analysis triggered."
+          '''
         }
       }
     }
@@ -59,47 +68,43 @@ mvn sonar:sonar \
     /* ---------------------- 4. QUALITY GATE ------------------ */
     stage('Quality Gate') {
       steps {
-        echo "[4/9] Quality Gate"
+        echo "[4/9] Checking Quality Gate"
         script {
           withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-            sh '''#!/bin/bash
-set -euo pipefail
+            sh '''
+              echo "[QGATE] Reading report-task.txt..."
+              CE_FILE="target/sonar/report-task.txt"
 
-CE_FILE="target/sonar/report-task.txt"
-if [ ! -f "$CE_FILE" ]; then
-  echo "ERROR: report-task.txt not found"
-  exit 1
-fi
+              if [ ! -f "$CE_FILE" ]; then
+                echo "[QGATE][ERROR] report-task.txt missing"
+                exit 1
+              fi
 
-ceTaskId=$(grep -o 'ceTaskId=[A-Za-z0-9\\-]*' "$CE_FILE" | cut -d= -f2 || true)
-if [ -z "$ceTaskId" ]; then
-  echo "CE Task ID NOT FOUND"
-  exit 1
-fi
+              ceTaskId=$(grep -o 'ceTaskId=[A-Za-z0-9\\-]*' "$CE_FILE" | cut -d= -f2)
+              echo "[QGATE] CE Task ID: $ceTaskId"
 
-echo "CE Task ID = $ceTaskId"
+              echo "[QGATE] Polling CE task status..."
+              while true; do
+                resp=$(curl -s -u "$SONAR_TOKEN": "${SONAR_HOST}/api/ce/task?id=$ceTaskId")
+                status=$(echo "$resp" | jq -r '.task.status')
+                echo "[QGATE] CE Status: $status"
 
-# Poll SonarQube Compute Engine
-while true; do
-  resp=$(curl -s -u "$SONAR_TOKEN": "${SONAR_HOST}/api/ce/task?id=$ceTaskId")
-  status=$(echo "$resp" | jq -r '.task.status')
-  echo "CE Status = $status"
+                if [ "$status" = "SUCCESS" ] || [ "$status" = "FAILED" ]; then
+                  break
+                fi
+                sleep 1
+              done
 
-  if [ "$status" = "SUCCESS" ] || [ "$status" = "FAILED" ]; then
-    break
-  fi
-  sleep 1
-done
+              analysisId=$(echo "$resp" | jq -r '.task.analysisId')
+              echo "[QGATE] Analysis ID: ${analysisId}"
 
-analysisId=$(echo "$resp" | jq -r '.task.analysisId')
-echo "Analysis ID = $analysisId"
+              echo "[QGATE] Fetching Quality Gate result..."
+              curl -s -u "$SONAR_TOKEN": \
+                "${SONAR_HOST}/api/qualitygates/project_status?analysisId=$analysisId" \
+                > "${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json"
 
-curl -s -u "$SONAR_TOKEN": \
-  "${SONAR_HOST}/api/qualitygates/project_status?analysisId=$analysisId" \
-  > "${REPORT_DIR}/qualitygate-${BUILD_NUMBER}.json"
-
-echo "QGate JSON saved."
-'''
+              echo "[QGATE] Quality Gate results saved."
+            '''
           }
         }
       }
@@ -110,16 +115,16 @@ echo "QGate JSON saved."
       steps {
         echo "[5/9] Fetching Issues"
         withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
-          sh '''#!/bin/bash
-set -euo pipefail
+          sh '''
+            echo "[FETCH] Fetching all issues..."
+            OUT="${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
 
-OUT="${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
-curl -s -u "$SONAR_TOKEN": \
-  "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
-  > "$OUT"
+            curl -s -u "$SONAR_TOKEN": \
+              "${SONAR_HOST}/api/issues/search?componentKeys=ai-code-assistant&ps=500" \
+              > "$OUT"
 
-echo "Issues stored: $OUT"
-'''
+            echo "[FETCH] Issues saved to: $OUT"
+          '''
         }
       }
     }
@@ -127,13 +132,16 @@ echo "Issues stored: $OUT"
     /* ---------------------- 6. AI REPORT --------------------- */
     stage('AI Analysis & Report Generation') {
       steps {
-        echo "[6/9] AI Report (Fast, Old+New, Safe)"
+        echo "[6/9] AI Report Generation started"
         withCredentials([
           string(credentialsId: 'OPENAI_KEY', variable: 'OPENAI_KEY'),
           string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')
         ]) {
+
           sh '''#!/bin/bash
 set -euo pipefail
+
+echo "[AI] Generating report..."
 
 REPORT_DIR="${REPORT_DIR}"
 ISSUES_FILE="${REPORT_DIR}/sonar-issues-${BUILD_NUMBER}.json"
@@ -142,24 +150,62 @@ MAX=${MAX_ISSUES_PROCESS:-20}
 
 mkdir -p "${REPORT_DIR}"
 
-# Header
-echo "# SonarQube Code Quality Report" > "${MD_FILE}"
-echo "**Build:** ${BUILD_NUMBER}" >> "${MD_FILE}"
-echo "**Generated:** $(date '+%Y-%m-%d %H:%M:%S')" >> "${MD_FILE}"
-echo "---" >> "${MD_FILE}"
+# -------------------------------------------------
+# REPORT HEADER
+# -------------------------------------------------
+echo "Writing header..."
+cat > "${MD_FILE}" <<EOF
+# SonarQube Code Quality Report
 
-# Summary
+Project: ai-code-assistant  
+Repository: ${REPO_ORG}/${REPO_NAME}  
+Branch: ${REPO_BRANCH}  
+Build: ${BUILD_NUMBER}  
+Generated: $(date '+%Y-%m-%d %H:%M:%S')  
+---
+EOF
+
+# -------------------------------------------------
+# SUMMARY (WITH EMOJI + COUNT)
+# -------------------------------------------------
+echo "[AI] Computing summary..."
+
 jq -r '[.issues[]?.severity] | group_by(.) | map({(.[0]): length}) | add' \
   "$ISSUES_FILE" > "${REPORT_DIR}/severity-summary.json"
 
-echo "## Summary" >> "${MD_FILE}"
-jq -r 'to_entries[] | "- " + .key + ": " + (.value|tostring)' \
-  "${REPORT_DIR}/severity-summary.json" >> "${MD_FILE}"
+BLOCKER=0
+CRITICAL=$(jq '.Critical // 0' "${REPORT_DIR}/severity-summary.json")
+MAJOR=$(jq '.Major // 0' "${REPORT_DIR}/severity-summary.json")
+MINOR=$(jq '.Minor // 0' "${REPORT_DIR}/severity-summary.json")
+INFO=$(jq '.INFO // 0' "${REPORT_DIR}/severity-summary.json")
+
+TOTAL=$((BLOCKER + CRITICAL + MAJOR + MINOR + INFO))
+cat >> "${MD_FILE}" <<EOF
+
+## Summary
+
+| Severity       | Count |
+|----------------|------:|
+| Blocker 🟥     | ${BLOCKER} |
+| Critical 🔴    | ${CRITICAL} |
+| Major 🟠       | ${MAJOR} |
+| Minor 🟡       | ${MINOR} |
+| Info 🔵        | ${INFO} |
+
+Total issues: ${TOTAL}
+
+EOF
+
+
+
+# -------------------------------------------------
+# ISSUE-BY-ISSUE AI PROCESSING (EXACTLY SAME)
+# -------------------------------------------------
 
 count=0
 
-# Loop issues
 jq -c '.issues[]' "${ISSUES_FILE}" | while read -r issue; do
+
   count=$((count+1))
   if [ "$MAX" -gt 0 ] && [ "$count" -gt "$MAX" ]; then
     break
@@ -169,7 +215,6 @@ jq -c '.issues[]' "${ISSUES_FILE}" | while read -r issue; do
   msg=$(echo "$issue" | jq -r '.message')
   severity=$(echo "$issue" | jq -r '.severity')
   component=$(echo "$issue" | jq -r '.component')
-
   filepath=$(echo "$component" | sed 's/^[^:]*://')
   line=$(echo "$issue" | jq -r '.line')
   issue_id=$(echo "$issue" | jq -r '.key')
@@ -177,19 +222,19 @@ jq -c '.issues[]' "${ISSUES_FILE}" | while read -r issue; do
   start=$(( line > 2 ? line-2 : 1 ))
   end=$(( line + 2 ))
 
-  # Snippet
   snippet="// File not found"
   if [ -f "$filepath" ]; then
     snippet=$(sed -n "${start},${end}p" "$filepath")
   fi
 
-  # AI prompt
-  PROMPT="Analyze Sonar issue & produce short summary, root cause, OLD CODE, NEW CODE patch, priority, risk.
+  PROMPT="Analyze SonarQube issue and provide: summary, root cause, old code, updated code, priority, risk.
+
 Rule: ${rule}
 Message: ${msg}
 Severity: ${severity}
 File: ${filepath}
 Line: ${line}
+
 Code:
 ${snippet}
 "
@@ -198,23 +243,22 @@ ${snippet}
     > "${REPORT_DIR}/payload-${count}.json"
 
   aiOut=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
-     -H "Authorization: Bearer ${OPENAI_KEY}" \
-     -H "Content-Type: application/json" \
-     --data-binary @"${REPORT_DIR}/payload-${count}.json" \
-     | jq -r '.choices[0].message.content // "(no response)"')
+    -H "Authorization: Bearer ${OPENAI_KEY}" \
+    -H "Content-Type: application/json" \
+    --data-binary @"${REPORT_DIR}/payload-${count}.json" \
+    | jq -r '.choices[0].message.content // "(no response)"')
 
-  # Append to report WITHOUT BACKTICKS
   cat >> "${MD_FILE}" <<EOF
 
 ---
 
 ### Issue ${count} — ${severity} — ${issue_id}
-**File:** ${filepath}  
-**Line:** ${line}  
-**Rule:** ${rule}
+File: ${filepath}  
+Line: ${line}  
+Rule: ${rule}
 
 #### Code Snippet
-<code java>
+<code>
 ${snippet}
 </code>
 
@@ -225,8 +269,8 @@ EOF
 
 done
 
-echo "---" >> "${MD_FILE}"
-echo "## End of Report" >> "${MD_FILE}"
+echo "[AI] Report generation completed."
+
 '''
         }
       }
@@ -235,7 +279,7 @@ echo "## End of Report" >> "${MD_FILE}"
     /* ---------------------- 7. ARCHIVE ------------------------ */
     stage('Archive Reports') {
       steps {
-        echo "[7/9] Archiving"
+        echo "[7/9] Archiving artifacts..."
         archiveArtifacts artifacts: "${REPORT_DIR}/*", allowEmptyArchive: true
       }
     }
@@ -243,7 +287,7 @@ echo "## End of Report" >> "${MD_FILE}"
     /* ---------------------- 8. FINISH ------------------------- */
     stage('Finish') {
       steps {
-        echo "[8/9] Pipeline Complete!"
+        echo "[8/9] Pipeline Complete."
       }
     }
   }
