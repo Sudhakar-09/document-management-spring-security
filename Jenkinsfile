@@ -175,11 +175,11 @@ echo "[AI] Computing summary..."
 jq -r '[.issues[]?.severity] | group_by(.) | map({(.[0]): length}) | add' \
   "$ISSUES_FILE" > "${REPORT_DIR}/severity-summary.json"
 
-# Read dynamic values (default 0 if key not present)
-BLOCKER=$(jq '.Blocker // 0' "${REPORT_DIR}/severity-summary.json")
-CRITICAL=$(jq '.Critical // 0' "${REPORT_DIR}/severity-summary.json")
-MAJOR=$(jq '.Major // 0' "${REPORT_DIR}/severity-summary.json")
-MINOR=$(jq '.Minor // 0' "${REPORT_DIR}/severity-summary.json")
+# Read dynamic values (UPPERCASE KEYS, default 0 if key not present)
+BLOCKER=$(jq '.BLOCKER // 0' "${REPORT_DIR}/severity-summary.json")
+CRITICAL=$(jq '.CRITICAL // 0' "${REPORT_DIR}/severity-summary.json")
+MAJOR=$(jq '.MAJOR // 0' "${REPORT_DIR}/severity-summary.json")
+MINOR=$(jq '.MINOR // 0' "${REPORT_DIR}/severity-summary.json")
 INFO=$(jq '.INFO // 0' "${REPORT_DIR}/severity-summary.json")
 
 TOTAL=$((BLOCKER + CRITICAL + MAJOR + MINOR + INFO))
